@@ -31,10 +31,8 @@
   if (window.__pooCamoInit) return;
   window.__pooCamoInit = true;
 
-  // Remove o destaque azul de seleção dentro da própria apostila
   const styleEl = document.createElement('style');
   styleEl.textContent = `
-    ::selection { background: rgba(0,0,0,0.06); color: inherit; }
     [data-ai-pin] { opacity: 0.35; user-select: none; font-weight: normal; }
     [data-ai-camo="ans-item"]:hover { opacity: 0.85; }
   `;
@@ -119,14 +117,12 @@
     editorInline = null;
   }
 
-  function copiarTextoSeguro(str) {
-    if (!str) return;
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(str).catch(() => {});
-    }
+  function copiarTextoFallbackDom(str) {
     const ta = document.createElement('textarea');
     ta.value = str;
     ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '0';
     ta.style.opacity = '0';
     ta.style.pointerEvents = 'none';
     document.body.appendChild(ta);
@@ -135,6 +131,15 @@
       document.execCommand('copy');
     } catch {}
     document.body.removeChild(ta);
+  }
+
+  function copiarTextoSeguro(str) {
+    if (!str) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(str).catch(() => copiarTextoFallbackDom(str));
+    } else {
+      copiarTextoFallbackDom(str);
+    }
   }
 
   // Clique em uma resposta copia para o Ctrl+C e mostra um "✓" discreto por 1s SEM apagar a resposta!
@@ -248,10 +253,12 @@
       let idxInicio = baseP.indexOf(pAlvo);
       if (idxInicio === -1) idxInicio = 0;
       const destinosAbertas = baseP.slice(idxInicio).length > 0 ? baseP.slice(idxInicio) : [pAlvo];
+      const ultimoInseridoPorBloco = new Map();
 
       abertas.forEach((item, idx) => {
         const pRef = destinosAbertas[Math.min(idx, destinosAbertas.length - 1)];
-        const blocoRef = obterBlocoPaiParaInsercao(pRef);
+        const blocoBase = obterBlocoPaiParaInsercao(pRef);
+        const ancora = ultimoInseridoPorBloco.get(blocoBase) || blocoBase;
         const prefixo = questoes.length > 1 ? `${item.num}. ` : '';
 
         if (item.tipo === 'CODIGO_JAVA') {
@@ -268,7 +275,8 @@
           content.appendChild(pre);
           wrapper.appendChild(content);
           tornarClicavelParaCopiar(wrapper, item.copy);
-          blocoRef.insertAdjacentElement('afterend', wrapper);
+          ancora.insertAdjacentElement('afterend', wrapper);
+          ultimoInseridoPorBloco.set(blocoBase, wrapper);
           elementosResposta.push(wrapper);
         } else {
           const divP = document.createElement('div');
@@ -278,7 +286,8 @@
           pNovo.textContent = `${prefixo}${item.copy}`;
           divP.appendChild(pNovo);
           tornarClicavelParaCopiar(divP, item.copy);
-          blocoRef.insertAdjacentElement('afterend', divP);
+          ancora.insertAdjacentElement('afterend', divP);
+          ultimoInseridoPorBloco.set(blocoBase, divP);
           elementosResposta.push(divP);
         }
       });
@@ -441,6 +450,7 @@
         const resp = await fetch(API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout ? AbortSignal.timeout(65000) : undefined,
           body: JSON.stringify(payload)
         });
         const data = await resp.json();
