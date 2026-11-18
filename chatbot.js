@@ -1,17 +1,24 @@
 /**
  * ============================================================================
- * ASSISTENTE DISCRETO COM IA (GITHUB PAGES + CLOUDFLARE WORKER)
+ * MODO CAMUFLADO NO TEXTO DA APOSTILA (ZERO INTERFACE VISÍVEL)
  * ============================================================================
- * - Gatilho invisível no canto inferior direito (só aparece ao passar o mouse)
- * - Atalhos rápidos: Alt + Q (abre/fecha) | Esc (esconde na hora)
- * - Aceita colar prints direto com Ctrl+V ou anexar imagem/PDF pelo botão "+"
- * - Otimiza prints grandes automaticamente para responder mais rápido
- * - Envia com segurança para o seu Cloudflare Worker (sem expor chave no site)
+ * Como funciona:
+ * 1. Ctrl + V direto na página (sem abrir nada): envia texto ou print copiado
+ *    sem mostrar a pergunta na tela.
+ * 2. Alt + Clique em qualquer parágrafo (ou Alt + Q): abre cursor invisível no
+ *    fim daquele parágrafo para digitar algo manual + Enter para enviar.
+ * 3. Alt + A: abre seletor para enviar um PDF ou imagem salva.
+ * 4. Como a resposta aparece:
+ *    - Múltipla escolha: surge no fim do parágrafo disfarçada de citação,
+ *      ex: "(p. 3)" ou "(p. 3c)".
+ *    - Questão escrita: surge como um parágrafo normal da apostila.
+ *    - Código Java: surge como um bloco de código cinza igual aos da aula.
+ * 5. Clique EM CIMA da resposta: copia o conteúdo limpo (Ctrl+C) e já apaga!
+ * 6. Clique FORA da resposta (ou tecla Esc): apaga instantaneamente (0ms)!
  * ============================================================================
  */
 
 (function () {
-  // Remove "/index.html" da barra de endereço caso seja acessado diretamente
   if (
     window.location.protocol !== 'file:' &&
     window.location.pathname.endsWith('/index.html')
@@ -25,40 +32,166 @@
 
   const API_URL = 'https://java-ifto.bentoxrxr.workers.dev/';
 
-  if (document.getElementById('poo-chatbot-host')) return;
+  if (window.__pooCamoInit) return;
+  window.__pooCamoInit = true;
 
-  function formatarResposta(texto) {
-    const escaped = texto
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+  let ultimoParagrafoHover = null;
+  let elementoAtivo = null;
+  let editorInline = null;
+  let textoParaCopiar = '';
+  let requisicaoId = 0;
 
-    const blocks = [];
-    let html = escaped.replace(/```(?:\w+)?\n?([\s\S]*?)```/g, function (_, code) {
-      const idx = blocks.length;
-      blocks.push(`<pre><code>${code.trim()}</code></pre>`);
-      return `@@CODEBLOCK_${idx}@@`;
-    });
+  // Input oculto apenas para o atalho Alt + A (envio de PDF/imagem do PC)
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = 'image/*,application/pdf';
+  fileInput.style.display = 'none';
+  document.body.appendChild(fileInput);
 
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\n/g, '<br>');
+  // Rastreia o último parágrafo sob o mouse para inserir a resposta onde você está olhando
+  document.addEventListener(
+    'mouseover',
+    (e) => {
+      const p = e.target && e.target.closest ? e.target.closest('#content p') : null;
+      if (p && !p.closest('[data-ai-camo]')) {
+        ultimoParagrafoHover = p;
+      }
+    },
+    { passive: true }
+  );
 
-    html = html.replace(/@@CODEBLOCK_(\d+)@@/g, function (_, idx) {
-      return blocks[Number(idx)];
-    });
-
-    return html;
+  function obterParagrafoAlvo() {
+    if (ultimoParagrafoHover && document.body.contains(ultimoParagrafoHover)) {
+      return ultimoParagrafoHover;
+    }
+    const paragrafos = Array.from(document.querySelectorAll('#content p')).filter(
+      (p) => !p.closest('[data-ai-camo]')
+    );
+    for (const p of paragrafos) {
+      const r = p.getBoundingClientRect();
+      if (r.bottom > 30 && r.top < window.innerHeight - 30) {
+        return p;
+      }
+    }
+    return paragrafos[0] || document.body;
   }
 
-  // Deixa o texto limpo ao clicar em "Copiar resposta" (sem ```java ou ** extras)
-  function limparTextoParaCopia(texto) {
-    const t = String(texto || '').trim();
-    const matchBlocoUnico = t.match(/^```(?:\w+)?\r?\n([\s\S]*?)\r?\n?```$/);
-    if (matchBlocoUnico) {
-      return matchBlocoUnico[1].trim();
+  function obterBlocoPaiParaInsercao(p) {
+    return (
+      p.closest('.paragraph, .olist, .ulist, .listingblock, .openblock') || p
+    );
+  }
+
+  function limparTudo() {
+    requisicaoId++; // Cancela visualmente respostas pendentes se o usuário limpou
+    if (elementoAtivo && elementoAtivo.parentNode) {
+      elementoAtivo.parentNode.removeChild(elementoAtivo);
     }
-    return t.replace(/\*\*([^*]+)\*\*/g, '$1');
+    elementoAtivo = null;
+    if (editorInline && editorInline.parentNode) {
+      editorInline.parentNode.removeChild(editorInline);
+    }
+    editorInline = null;
+    textoParaCopiar = '';
+  }
+
+  function copiarTextoFallback(str) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(str).catch(() => {});
+    }
+    const ta = document.createElement('textarea');
+    ta.value = str;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    ta.style.pointerEvents = 'none';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+    } catch {}
+    document.body.removeChild(ta);
+  }
+
+  function anexarCliqueCopiaESome(el) {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (textoParaCopiar) {
+        copiarTextoFallback(textoParaCopiar);
+      }
+      limparTudo();
+    });
+  }
+
+  function mostrarCarregando(pAlvo) {
+    limparTudo();
+    const span = document.createElement('span');
+    span.setAttribute('data-ai-camo', 'loading');
+    span.textContent = ' ...';
+    span.style.opacity = '0.45';
+    pAlvo.appendChild(span);
+    elementoAtivo = span;
+  }
+
+  function renderizarRespostaCamuflada(pAlvo, dados) {
+    if (elementoAtivo && elementoAtivo.parentNode) {
+      elementoAtivo.parentNode.removeChild(elementoAtivo);
+    }
+    elementoAtivo = null;
+
+    const tipo = dados.tipo || 'DISCURSIVA';
+    const exibicao = String(dados.text || '').trim();
+    textoParaCopiar = String(dados.copy || exibicao).trim();
+
+    if (!exibicao) return;
+
+    // 1. Múltipla escolha -> citação bibliográfica discreta no fim do próprio parágrafo: "(p. 3)"
+    if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO' || exibicao.length <= 28) {
+      const span = document.createElement('span');
+      span.setAttribute('data-ai-camo', 'ans');
+      const formatado = exibicao.startsWith('(') ? ` ${exibicao}` : ` (${exibicao})`;
+      span.textContent = formatado;
+      span.style.cursor = 'text';
+      anexarCliqueCopiaESome(span);
+      pAlvo.appendChild(span);
+      elementoAtivo = span;
+      return;
+    }
+
+    const blocoRef = obterBlocoPaiParaInsercao(pAlvo);
+
+    // 2. Código Java -> bloco de código idêntico aos exemplos da apostila Asciidoctor
+    if (tipo === 'CODIGO_JAVA') {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'listingblock';
+      wrapper.setAttribute('data-ai-camo', 'ans');
+      const content = document.createElement('div');
+      content.className = 'content';
+      const pre = document.createElement('pre');
+      pre.className = 'highlight';
+      const code = document.createElement('code');
+      code.textContent = exibicao;
+      pre.appendChild(code);
+      content.appendChild(pre);
+      wrapper.appendChild(content);
+      wrapper.style.cursor = 'text';
+      anexarCliqueCopiaESome(wrapper);
+      blocoRef.insertAdjacentElement('afterend', wrapper);
+      elementoAtivo = wrapper;
+      return;
+    }
+
+    // 3. Questão discursiva -> parágrafo idêntico aos parágrafos originais da apostila
+    const divP = document.createElement('div');
+    divP.className = 'paragraph';
+    divP.setAttribute('data-ai-camo', 'ans');
+    const pNovo = document.createElement('p');
+    pNovo.textContent = exibicao;
+    divP.appendChild(pNovo);
+    divP.style.cursor = 'text';
+    anexarCliqueCopiaESome(divP);
+    blocoRef.insertAdjacentElement('afterend', divP);
+    elementoAtivo = divP;
   }
 
   function fileToBase64(file) {
@@ -66,15 +199,13 @@
       const reader = new FileReader();
       reader.onload = () => {
         const result = reader.result || '';
-        const base64 = String(result).split(',')[1] || '';
-        resolve(base64);
+        resolve(String(result).split(',')[1] || '');
       };
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
   }
 
-  // Reduz prints muito pesados (> 800 KB) mantendo nitidez total para leitura de texto/código
   function processarArquivo(file) {
     return new Promise(async (resolve, reject) => {
       try {
@@ -82,8 +213,7 @@
           const base64 = await fileToBase64(file);
           return resolve({
             mimeType: file.type || 'application/octet-stream',
-            data: base64,
-            name: file.name || 'anexo'
+            data: base64
           });
         }
 
@@ -108,8 +238,7 @@
           const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
           resolve({
             mimeType: 'image/jpeg',
-            data: dataUrl.split(',')[1] || '',
-            name: file.name || 'print.jpg'
+            data: dataUrl.split(',')[1] || ''
           });
         };
         img.onerror = async () => {
@@ -117,8 +246,7 @@
           const base64 = await fileToBase64(file);
           resolve({
             mimeType: file.type || 'image/png',
-            data: base64,
-            name: file.name || 'print.png'
+            data: base64
           });
         };
         img.src = url;
@@ -128,402 +256,176 @@
     });
   }
 
-  const host = document.createElement('div');
-  host.id = 'poo-chatbot-host';
-  document.body.appendChild(host);
-  const shadow = host.attachShadow({ mode: 'open' });
-
-  shadow.innerHTML = `
-    <style>
-      :host {
-        all: initial;
-        font-family: "Open Sans", sans-serif;
-        color: #333;
-      }
-      * {
-        box-sizing: border-box;
-      }
-
-      /* Gatilho invisível no canto inferior direito (branco igual ao fundo) */
-      .trigger {
-        position: fixed;
-        right: 10px;
-        bottom: 10px;
-        width: 34px;
-        height: 26px;
-        z-index: 99999;
-        background: #ffffff;
-        color: transparent;
-        border: 1px solid transparent;
-        border-radius: 4px;
-        font-size: 11px;
-        cursor: default;
-        opacity: 0;
-        transition: opacity 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 0;
-      }
-      .trigger:hover {
-        opacity: 1;
-        background: #fafafa;
-        border-color: #e2e2e2;
-        color: #b0b0b0;
-        cursor: pointer;
-      }
-
-      /* Painel minimalista e discreto */
-      .panel {
-        position: fixed;
-        right: 12px;
-        bottom: 42px;
-        z-index: 99999;
-        width: 390px;
-        max-width: calc(100vw - 24px);
-        max-height: 78vh;
-        background: #ffffff;
-        border: 1px solid #e6e6e6;
-        border-radius: 4px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-        display: none;
-        flex-direction: column;
-        padding: 8px;
-        gap: 6px;
-      }
-      .panel.open {
-        display: flex;
-      }
-
-      .topbar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        font-size: 11px;
-        color: #999;
-      }
-      .topbar-right {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      .link-btn {
-        background: none;
-        border: none;
-        padding: 0 2px;
-        font-size: 11px;
-        color: #aaa;
-        cursor: pointer;
-      }
-      .link-btn:hover {
-        color: #555;
-      }
-
-      .attachment-chip {
-        display: none;
-        align-items: center;
-        justify-content: space-between;
-        gap: 6px;
-        background: #f7f7f7;
-        border: 1px solid #e5e5e5;
-        border-radius: 3px;
-        padding: 4px 8px;
-        font-size: 11px;
-        color: #555;
-      }
-      .attachment-chip.visible {
-        display: flex;
-      }
-      .attachment-name {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .prompt-row {
-        display: flex;
-        gap: 4px;
-        align-items: flex-start;
-      }
-      .prompt-row textarea {
-        flex: 1;
-        resize: vertical;
-        min-height: 44px;
-        max-height: 120px;
-        border: 1px solid #e5e5e5;
-        border-radius: 3px;
-        padding: 6px 8px;
-        font-family: inherit;
-        font-size: 12px;
-        color: #333;
-        background: #ffffff;
-        outline: none;
-      }
-      .prompt-row textarea:focus {
-        border-color: #cccccc;
-      }
-      .small-btn {
-        background: #f5f5f5;
-        border: 1px solid #e0e0e0;
-        border-radius: 3px;
-        padding: 5px 8px;
-        font-size: 11px;
-        color: #555;
-        cursor: pointer;
-        height: 28px;
-      }
-      .small-btn:hover {
-        background: #ececec;
-      }
-      .small-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-
-      .output-wrap {
-        display: none;
-        flex-direction: column;
-        gap: 6px;
-        border-top: 1px solid #efefef;
-        padding-top: 6px;
-      }
-      .output-wrap.visible {
-        display: flex;
-      }
-      .output {
-        overflow-y: auto;
-        max-height: 46vh;
-        padding: 4px 2px;
-        font-size: 12px;
-        line-height: 1.5;
-        color: #333;
-        word-wrap: break-word;
-      }
-      .output pre {
-        background: #f7f7f8;
-        color: #222;
-        border: 1px solid #eaeaea;
-        padding: 8px;
-        border-radius: 3px;
-        overflow-x: auto;
-        font-family: "Droid Sans Mono", monospace;
-        font-size: 11.5px;
-        margin: 6px 0;
-        white-space: pre-wrap;
-      }
-      .output code {
-        font-family: "Droid Sans Mono", monospace;
-        background: #f5f5f5;
-        padding: 1px 3px;
-        border-radius: 2px;
-        font-size: 11.5px;
-      }
-      .output pre code {
-        background: transparent;
-        padding: 0;
-      }
-      .output-actions {
-        display: flex;
-        justify-content: flex-end;
-      }
-    </style>
-
-    <button class="trigger" id="triggerBtn" aria-label="Abrir">···</button>
-
-    <div class="panel" id="panel">
-      <div class="topbar">
-        <button class="link-btn" id="attachBtn" title="Anexar imagem ou PDF">+ anexo</button>
-        <input type="file" id="fileInput" accept="image/*,application/pdf" style="display:none;" />
-        <div class="topbar-right">
-          <button class="link-btn" id="clearBtn" title="Limpar">limpar</button>
-          <button class="link-btn" id="closeBtn" title="Fechar (Esc)">×</button>
-        </div>
-      </div>
-
-      <div class="attachment-chip" id="attachmentChip">
-        <span class="attachment-name" id="attachmentName"></span>
-        <button class="link-btn" id="removeAttachmentBtn" title="Remover anexo">×</button>
-      </div>
-
-      <div class="prompt-row">
-        <textarea id="promptInput" rows="2" placeholder="Cole a questão ou print (Ctrl+V)..."></textarea>
-        <button class="small-btn" id="sendBtn">ir</button>
-      </div>
-
-      <div class="output-wrap" id="outputWrap">
-        <div class="output" id="output"></div>
-        <div class="output-actions">
-          <button class="small-btn" id="copyBtn" style="display:none;">Copiar resposta</button>
-        </div>
-      </div>
-    </div>
-  `;
-
-  const triggerBtn = shadow.getElementById('triggerBtn');
-  const panel = shadow.getElementById('panel');
-  const closeBtn = shadow.getElementById('closeBtn');
-  const clearBtn = shadow.getElementById('clearBtn');
-  const attachBtn = shadow.getElementById('attachBtn');
-  const fileInput = shadow.getElementById('fileInput');
-  const attachmentChip = shadow.getElementById('attachmentChip');
-  const attachmentName = shadow.getElementById('attachmentName');
-  const removeAttachmentBtn = shadow.getElementById('removeAttachmentBtn');
-  const promptInput = shadow.getElementById('promptInput');
-  const sendBtn = shadow.getElementById('sendBtn');
-  const outputWrap = shadow.getElementById('outputWrap');
-  const output = shadow.getElementById('output');
-  const copyBtn = shadow.getElementById('copyBtn');
-
-  let anexoAtual = null;
-  let ultimaRespostaTexto = '';
-  let carregando = false;
-
-  function definirAnexo(obj) {
-    anexoAtual = obj;
-    attachmentName.textContent = obj.name;
-    attachmentChip.classList.add('visible');
-  }
-
-  function limparAnexo() {
-    anexoAtual = null;
-    fileInput.value = '';
-    attachmentName.textContent = '';
-    attachmentChip.classList.remove('visible');
-  }
-
-  function alternarPainel() {
-    panel.classList.toggle('open');
-    if (panel.classList.contains('open')) {
-      setTimeout(() => promptInput.focus(), 10);
+  async function enviarArquivoParaIA(file, pAlvo) {
+    const alvo = pAlvo || obterParagrafoAlvo();
+    mostrarCarregando(alvo);
+    const idInicial = requisicaoId;
+    try {
+      const proc = await processarArquivo(file);
+      if (idInicial !== requisicaoId) return; // Cancelado durante processamento
+      await enviarParaIA('', proc, alvo, true);
+    } catch {
+      if (idInicial === requisicaoId) limparTudo();
     }
   }
 
-  triggerBtn.addEventListener('click', alternarPainel);
-
-  closeBtn.addEventListener('click', () => {
-    panel.classList.remove('open');
-  });
-
-  // Esconde instantaneamente ao clicar/tocar em qualquer lugar fora do painel
-  document.addEventListener(
-    'pointerdown',
-    (e) => {
-      if (!panel.classList.contains('open')) return;
-      const caminho = e.composedPath ? e.composedPath() : [];
-      if (!caminho.includes(panel) && !caminho.includes(triggerBtn)) {
-        panel.classList.remove('open');
-      }
-    },
-    true
-  );
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && panel.classList.contains('open')) {
-      panel.classList.remove('open');
-    } else if (e.altKey && (e.key === 'q' || e.key === 'Q')) {
-      e.preventDefault();
-      alternarPainel();
+  async function enviarParaIA(texto, anexo, pAlvo, jaMostrouLoading) {
+    const alvo = pAlvo || obterParagrafoAlvo();
+    if (!jaMostrouLoading) {
+      mostrarCarregando(alvo);
     }
-  });
-
-  attachBtn.addEventListener('click', () => {
-    fileInput.click();
-  });
-
-  fileInput.addEventListener('change', async () => {
-    const file = fileInput.files && fileInput.files[0];
-    if (!file) return;
-    const proc = await processarArquivo(file);
-    definirAnexo(proc);
-    promptInput.focus();
-  });
-
-  removeAttachmentBtn.addEventListener('click', limparAnexo);
-
-  panel.addEventListener('paste', async (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-
-    for (const item of items) {
-      if (item.kind === 'file') {
-        const file = item.getAsFile();
-        if (file && (file.type.startsWith('image/') || file.type === 'application/pdf')) {
-          e.preventDefault();
-          const proc = await processarArquivo(file);
-          definirAnexo(proc);
-          promptInput.focus();
-          return;
-        }
-      }
-    }
-  });
-
-  clearBtn.addEventListener('click', () => {
-    promptInput.value = '';
-    ultimaRespostaTexto = '';
-    output.innerHTML = '';
-    outputWrap.classList.remove('visible');
-    copyBtn.style.display = 'none';
-    limparAnexo();
-    promptInput.focus();
-  });
-
-  copyBtn.addEventListener('click', () => {
-    if (!ultimaRespostaTexto) return;
-    const textoLimpo = limparTextoParaCopia(ultimaRespostaTexto);
-    navigator.clipboard.writeText(textoLimpo).then(() => {
-      copyBtn.textContent = 'Copiado!';
-      setTimeout(() => {
-        copyBtn.textContent = 'Copiar resposta';
-      }, 1200);
-    });
-  });
-
-  async function enviarPrompt() {
-    const texto = promptInput.value.trim();
-    if ((!texto && !anexoAtual) || carregando) return;
-
-    carregando = true;
-    sendBtn.disabled = true;
-    copyBtn.style.display = 'none';
-    output.textContent = '...';
-    outputWrap.classList.add('visible');
+    const meuId = requisicaoId;
 
     try {
       const resp = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          texto: texto,
-          anexo: anexoAtual
-            ? { mimeType: anexoAtual.mimeType, data: anexoAtual.data }
-            : null
+          texto: texto || '',
+          anexo: anexo || null
         })
       });
 
       const data = await resp.json();
+      if (meuId !== requisicaoId) return; // Já foi cancelado/limpo
 
       if (!resp.ok) {
-        throw new Error(data?.error || `Erro ${resp.status}`);
+        throw new Error(data?.error || 'erro');
       }
 
-      const respostaIA = data?.text || 'Sem resposta.';
-      ultimaRespostaTexto = respostaIA;
-      output.innerHTML = formatarResposta(respostaIA);
-      copyBtn.style.display = 'inline-block';
-    } catch (err) {
-      output.textContent = 'Erro: ' + (err.message || 'falha na requisição.');
-    } finally {
-      carregando = false;
-      sendBtn.disabled = false;
+      renderizarRespostaCamuflada(alvo, data);
+    } catch {
+      if (meuId !== requisicaoId) return;
+      renderizarRespostaCamuflada(alvo, {
+        tipo: 'MULTIPLA_ESCOLHA',
+        text: '(—)',
+        copy: ''
+      });
     }
   }
 
-  sendBtn.addEventListener('click', enviarPrompt);
-  promptInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      enviarPrompt();
+  // Abre cursor de edição camuflado no fim de um parágrafo (Alt + Clique ou Alt + Q)
+  function abrirEditorCamuflado(pAlvo) {
+    const alvo = pAlvo || obterParagrafoAlvo();
+    limparTudo();
+
+    const span = document.createElement('span');
+    span.setAttribute('data-ai-camo', 'editor');
+    span.contentEditable = 'true';
+    span.style.outline = 'none';
+    span.style.border = 'none';
+    span.style.background = 'transparent';
+    span.style.font = 'inherit';
+    span.style.color = 'inherit';
+    span.style.marginLeft = '4px';
+    span.style.minWidth = '8px';
+    span.style.display = 'inline-block';
+    alvo.appendChild(span);
+    editorInline = span;
+    span.focus();
+
+    span.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        limparTudo();
+      } else if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const txt = span.innerText.trim();
+        if (txt) {
+          enviarParaIA(txt, null, alvo);
+        } else {
+          limparTudo();
+        }
+      }
+    });
+  }
+
+  // 1) Ctrl + V invisível em qualquer lugar da página (texto ou print!)
+  document.addEventListener('paste', async (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+
+    // Verifica primeiro se há print/imagem ou PDF na área de transferência
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file && (file.type.startsWith('image/') || file.type === 'application/pdf')) {
+          e.preventDefault();
+          enviarArquivoParaIA(file, obterParagrafoAlvo());
+          return;
+        }
+      }
     }
+
+    // Se o editor manual estiver aberto, deixa colar texto dentro dele normalmente
+    if (editorInline && document.activeElement === editorInline) {
+      return;
+    }
+
+    // Caso contrário, envia o texto colado direto e invisivelmente (sem mostrar a pergunta!)
+    const textoColado = e.clipboardData.getData('text/plain');
+    if (textoColado && textoColado.trim()) {
+      e.preventDefault();
+      enviarParaIA(textoColado.trim(), null, obterParagrafoAlvo());
+    }
+  });
+
+  // 2) Alt + Clique em qualquer parágrafo abre o cursor invisível ali mesmo
+  document.addEventListener(
+    'mousedown',
+    (e) => {
+      if (e.altKey) {
+        const p = e.target && e.target.closest ? e.target.closest('#content p') : null;
+        if (p) {
+          e.preventDefault();
+          e.stopPropagation();
+          abrirEditorCamuflado(p);
+          return;
+        }
+      }
+    },
+    true
+  );
+
+  // 3) Clique em qualquer lugar FORA da resposta/editor limpa tudo instantaneamente (0ms)
+  document.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (e.altKey) return;
+      const clicouDentroAtivo = elementoAtivo && elementoAtivo.contains(e.target);
+      const clicouDentroEditor = editorInline && editorInline.contains(e.target);
+      if (!clicouDentroAtivo && !clicouDentroEditor) {
+        if (elementoAtivo || editorInline) {
+          limparTudo();
+        }
+      }
+    },
+    true
+  );
+
+  // 4) Atalhos de teclado: Esc (limpa), Alt + Q (cursor manual), Alt + A (anexar PDF/imagem)
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (elementoAtivo || editorInline) {
+        limparTudo();
+      }
+    } else if (e.altKey && (e.key === 'q' || e.key === 'Q')) {
+      e.preventDefault();
+      if (editorInline) {
+        limparTudo();
+      } else {
+        abrirEditorCamuflado(obterParagrafoAlvo());
+      }
+    } else if (e.altKey && (e.key === 'a' || e.key === 'A')) {
+      e.preventDefault();
+      fileInput.click();
+    }
+  });
+
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files && fileInput.files[0];
+    fileInput.value = '';
+    if (!file) return;
+    enviarArquivoParaIA(file, obterParagrafoAlvo());
   });
 })();
