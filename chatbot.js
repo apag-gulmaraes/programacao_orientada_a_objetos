@@ -177,7 +177,7 @@
   function posicoesParaLetras(posicoes) {
     if (!Array.isArray(posicoes) || posicoes.length === 0) return '?';
     return posicoes
-      .map((n) => (n >= 1 && n <= 26 ? String.fromCharCode(64 + n) : String(n)))
+      .map((n) => (n >= 1 && n <= 26 ? String.fromCharCode(96 + n) : String(n)))
       .join('');
   }
 
@@ -204,26 +204,54 @@
       }
     });
 
-    // 1. Todas as de múltipla escolha viram UMA ÚNICA LINHA discreta no fim do parágrafo: "(1A, 2B, 3C...)"
+    // Filtra parágrafos reais com texto suficiente para camuflar no final das frases
+    const todosP = todosParagrafosReais();
+    const paragrafosBons = todosP.filter((p) => (p.textContent || '').trim().length >= 20);
+    const baseP = paragrafosBons.length >= 3 ? paragrafosBons : todosP;
+
+    // 1. Espalha as respostas pelos parágrafos da página de cima para baixo: "(p. 1a, 2b)"
     if (partesMultipla.length > 0) {
-      const span = document.createElement('span');
-      const textoInline = partesMultipla.map((p) => p.rotulo).join(', ');
-      span.textContent = ` (${textoInline})`;
-      const textoCopia =
-        partesMultipla.length === 1 && partesMultipla[0].copy
-          ? partesMultipla[0].copy
-          : textoInline;
-      tornarClicavelParaCopiar(span, textoCopia);
-      pAlvo.appendChild(span);
-      elementosResposta.push(span);
+      if (partesMultipla.length === 1) {
+        const span = document.createElement('span');
+        span.textContent = ` (p. ${partesMultipla[0].rotulo})`;
+        tornarClicavelParaCopiar(span, partesMultipla[0].copy || partesMultipla[0].rotulo);
+        pAlvo.appendChild(span);
+        elementosResposta.push(span);
+      } else {
+        let idxInicio = baseP.indexOf(pAlvo);
+        if (idxInicio === -1) idxInicio = 0;
+        let destinos = baseP.slice(idxInicio);
+
+        // Se o ponto fixo estiver muito embaixo e houver muitas questões, distribui na página toda
+        if (partesMultipla.length > destinos.length * 3 && baseP.length > destinos.length) {
+          destinos = baseP;
+        }
+        if (destinos.length === 0) destinos = [pAlvo];
+
+        const porParagrafo = Math.max(1, Math.ceil(partesMultipla.length / destinos.length));
+        const gabaritoCompleto = partesMultipla.map((p) => p.rotulo).join(', ');
+
+        for (let i = 0, pIdx = 0; i < partesMultipla.length; i += porParagrafo, pIdx++) {
+          const fatia = partesMultipla.slice(i, i + porParagrafo);
+          const pDestino = destinos[Math.min(pIdx, destinos.length - 1)];
+          const span = document.createElement('span');
+          span.textContent = ` (p. ${fatia.map((f) => f.rotulo).join(', ')})`;
+          tornarClicavelParaCopiar(span, gabaritoCompleto);
+          pDestino.appendChild(span);
+          elementosResposta.push(span);
+        }
+      }
     }
 
-    // 2. Apenas questões discursivas ou de código Java (quando existirem) aparecem abaixo, sem explicações extras
+    // 2. Se houver questões abertas/código, espalha também entre os blocos da página
     if (abertas.length > 0) {
-      const blocoRef = obterBlocoPaiParaInsercao(pAlvo);
-      let ultimoInserido = blocoRef;
+      let idxInicio = baseP.indexOf(pAlvo);
+      if (idxInicio === -1) idxInicio = 0;
+      const destinosAbertas = baseP.slice(idxInicio).length > 0 ? baseP.slice(idxInicio) : [pAlvo];
 
-      for (const item of abertas) {
+      abertas.forEach((item, idx) => {
+        const pRef = destinosAbertas[Math.min(idx, destinosAbertas.length - 1)];
+        const blocoRef = obterBlocoPaiParaInsercao(pRef);
         const prefixo = questoes.length > 1 ? `${item.num}. ` : '';
 
         if (item.tipo === 'CODIGO_JAVA') {
@@ -240,8 +268,7 @@
           content.appendChild(pre);
           wrapper.appendChild(content);
           tornarClicavelParaCopiar(wrapper, item.copy);
-          ultimoInserido.insertAdjacentElement('afterend', wrapper);
-          ultimoInserido = wrapper;
+          blocoRef.insertAdjacentElement('afterend', wrapper);
           elementosResposta.push(wrapper);
         } else {
           const divP = document.createElement('div');
@@ -251,11 +278,10 @@
           pNovo.textContent = `${prefixo}${item.copy}`;
           divP.appendChild(pNovo);
           tornarClicavelParaCopiar(divP, item.copy);
-          ultimoInserido.insertAdjacentElement('afterend', divP);
-          ultimoInserido = divP;
+          blocoRef.insertAdjacentElement('afterend', divP);
           elementosResposta.push(divP);
         }
-      }
+      });
     }
   }
 
@@ -379,7 +405,7 @@
 
       return {
         textoComMarcadores: extraido || plainFallback || '',
-        imagens: imagens.slice(0, 20)
+        imagens: imagens.slice(0, 40)
       };
     } catch {
       return { textoComMarcadores: plainFallback || '', imagens: [] };
@@ -389,7 +415,7 @@
   // Tenta resolver imagens remotas no navegador; se bloquear por CORS, o Worker baixa!
   async function prepararImagensOrdenadas(listaBruta) {
     return await Promise.all(
-      listaBruta.slice(0, 20).map(async (item) => {
+      listaBruta.slice(0, 40).map(async (item) => {
         if (item.data && item.mimeType) return item;
         if (item.url) {
           try {
