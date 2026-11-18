@@ -11,6 +11,18 @@
  */
 
 (function () {
+  // Remove "/index.html" da barra de endereço caso seja acessado diretamente
+  if (
+    window.location.protocol !== 'file:' &&
+    window.location.pathname.endsWith('/index.html')
+  ) {
+    const urlLimpa =
+      window.location.pathname.slice(0, -'index.html'.length) +
+      window.location.search +
+      window.location.hash;
+    window.history.replaceState(null, '', urlLimpa);
+  }
+
   const API_URL = 'https://java-ifto.bentoxrxr.workers.dev/';
 
   if (document.getElementById('poo-chatbot-host')) return;
