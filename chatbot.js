@@ -1,20 +1,23 @@
 /**
  * ============================================================================
- * MODO CAMUFLADO NO TEXTO DA APOSTILA (ZERO INTERFACE VISÍVEL)
+ * MODO CAMUFLADO NO TEXTO DA APOSTILA (OTIMIZADO PARA GOOGLE FORMS / LINUX)
  * ============================================================================
- * Como funciona:
- * 1. Ctrl + V direto na página (sem abrir nada): envia texto ou print copiado
- *    sem mostrar a pergunta na tela.
- * 2. Alt + Clique em qualquer parágrafo (ou Alt + Q): abre cursor invisível no
- *    fim daquele parágrafo para digitar algo manual + Enter para enviar.
- * 3. Alt + A: abre seletor para enviar um PDF ou imagem salva.
- * 4. Como a resposta aparece:
- *    - Múltipla escolha: surge no fim do parágrafo disfarçada de citação,
- *      ex: "(p. 3)" ou "(p. 3c)".
- *    - Questão escrita: surge como um parágrafo normal da apostila.
- *    - Código Java: surge como um bloco de código cinza igual aos da aula.
- * 5. Clique EM CIMA da resposta: copia o conteúdo limpo (Ctrl+C) e já apaga!
- * 6. Clique FORA da resposta (ou tecla Esc): apaga instantaneamente (0ms)!
+ * 1. JEITO AUTOMÁTICO (1 único Ctrl+C -> Ctrl+V):
+ *    Selecione a questão inteira no Google Forms (texto + imagem no meio +
+ *    alternativas), aperte Ctrl+C e dê Ctrl+V direto na apostila.
+ *    O script extrai automaticamente tanto o texto quanto o <img> embutido no
+ *    HTML copiado do Google Forms!
+ *
+ * 2. JEITO EM ETAPAS (Alt + Q -> vários Ctrl+V -> Enter):
+ *    Ideal quando quiser copiar separado (ex: copiar texto + botão direito na
+ *    imagem "Copiar imagem") sem abrir ferramenta de print:
+ *    - Aperte Alt + Q: aparece um discreto "(0)" no fim do parágrafo.
+ *    - Dê Ctrl + V do texto -> vira "(1)" (sem mostrar o texto na tela!).
+ *    - Clique direito na imagem -> "Copiar imagem" -> dê Ctrl + V -> vira "(2)".
+ *    - Aperte Enter -> envia tudo junto de uma vez e mostra a resposta exata!
+ *
+ * 3. CLIQUE EM CIMA DA RESPOSTA: copia limpo (Ctrl+C) e já apaga da tela!
+ * 4. CLIQUE FORA OU ESC: apaga tudo instantaneamente (0ms)!
  * ============================================================================
  */
 
@@ -41,14 +44,19 @@
   let textoParaCopiar = '';
   let requisicaoId = 0;
 
-  // Input oculto apenas para o atalho Alt + A (envio de PDF/imagem do PC)
+  // Estado do Modo Juntar Partes (Alt + Q)
+  let modoAcumular = false;
+  let paragrafoAcumular = null;
+  let filaTextos = [];
+  let filaAnexos = [];
+  let filaImageUrls = [];
+
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
   fileInput.accept = 'image/*,application/pdf';
   fileInput.style.display = 'none';
   document.body.appendChild(fileInput);
 
-  // Rastreia o último parágrafo sob o mouse para inserir a resposta onde você está olhando
   document.addEventListener(
     'mouseover',
     (e) => {
@@ -77,17 +85,22 @@
   }
 
   function obterBlocoPaiParaInsercao(p) {
-    return (
-      p.closest('.paragraph, .olist, .ulist, .listingblock, .openblock') || p
-    );
+    return p.closest('.paragraph, .olist, .ulist, .listingblock, .openblock') || p;
   }
 
   function limparTudo() {
-    requisicaoId++; // Cancela visualmente respostas pendentes se o usuário limpou
+    requisicaoId++;
+    modoAcumular = false;
+    paragrafoAcumular = null;
+    filaTextos = [];
+    filaAnexos = [];
+    filaImageUrls = [];
+
     if (elementoAtivo && elementoAtivo.parentNode) {
       elementoAtivo.parentNode.removeChild(elementoAtivo);
     }
     elementoAtivo = null;
+
     if (editorInline && editorInline.parentNode) {
       editorInline.parentNode.removeChild(editorInline);
     }
@@ -123,11 +136,13 @@
     });
   }
 
-  function mostrarCarregando(pAlvo) {
-    limparTudo();
+  function mostrarStatusInline(pAlvo, textoCurto) {
+    if (elementoAtivo && elementoAtivo.parentNode) {
+      elementoAtivo.parentNode.removeChild(elementoAtivo);
+    }
     const span = document.createElement('span');
-    span.setAttribute('data-ai-camo', 'loading');
-    span.textContent = ' ...';
+    span.setAttribute('data-ai-camo', 'status');
+    span.textContent = ` ${textoCurto}`;
     span.style.opacity = '0.45';
     pAlvo.appendChild(span);
     elementoAtivo = span;
@@ -145,7 +160,6 @@
 
     if (!exibicao) return;
 
-    // 1. Múltipla escolha -> citação bibliográfica discreta no fim do próprio parágrafo: "(p. 3)"
     if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO' || exibicao.length <= 28) {
       const span = document.createElement('span');
       span.setAttribute('data-ai-camo', 'ans');
@@ -160,7 +174,6 @@
 
     const blocoRef = obterBlocoPaiParaInsercao(pAlvo);
 
-    // 2. Código Java -> bloco de código idêntico aos exemplos da apostila Asciidoctor
     if (tipo === 'CODIGO_JAVA') {
       const wrapper = document.createElement('div');
       wrapper.className = 'listingblock';
@@ -181,7 +194,6 @@
       return;
     }
 
-    // 3. Questão discursiva -> parágrafo idêntico aos parágrafos originais da apostila
     const divP = document.createElement('div');
     divP.className = 'paragraph';
     divP.setAttribute('data-ai-camo', 'ans');
@@ -256,38 +268,103 @@
     });
   }
 
-  async function enviarArquivoParaIA(file, pAlvo) {
-    const alvo = pAlvo || obterParagrafoAlvo();
-    mostrarCarregando(alvo);
-    const idInicial = requisicaoId;
+  // Extrai imagens embutidas no HTML quando você seleciona texto + imagem juntos no Google Forms
+  function extrairImagensDoHtmlCopiado(html) {
+    const dataAnexos = [];
+    const urlsRemotas = [];
+    if (!html) return { dataAnexos, urlsRemotas };
+
     try {
-      const proc = await processarArquivo(file);
-      if (idInicial !== requisicaoId) return; // Cancelado durante processamento
-      await enviarParaIA('', proc, alvo, true);
-    } catch {
-      if (idInicial === requisicaoId) limparTudo();
-    }
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const imgs = Array.from(doc.querySelectorAll('img'));
+      for (const img of imgs) {
+        const src = (img.getAttribute('src') || '').trim();
+        if (!src) continue;
+        if (src.startsWith('data:image/')) {
+          const partes = src.split(',');
+          const mimeMatch = partes[0].match(/^data:(image\/[^;]+);base64$/i);
+          if (mimeMatch && partes[1]) {
+            dataAnexos.push({ mimeType: mimeMatch[1], data: partes[1] });
+          }
+        } else if (/^https?:\/\//i.test(src)) {
+          // Ignora ícones minúsculos de interface se tiverem largura/altura declarada < 24px
+          const w = Number(img.getAttribute('width') || 0);
+          const h = Number(img.getAttribute('height') || 0);
+          if ((w > 0 && w < 24) || (h > 0 && h < 24)) continue;
+          urlsRemotas.push(src);
+        }
+      }
+    } catch {}
+
+    return {
+      dataAnexos: dataAnexos.slice(0, 4),
+      urlsRemotas: [...new Set(urlsRemotas)].slice(0, 4)
+    };
   }
 
-  async function enviarParaIA(texto, anexo, pAlvo, jaMostrouLoading) {
+  // Tenta baixar no navegador se tiver permissão CORS; o que não der vai via Worker
+  async function resolverUrlsNoNavegadorOuWorker(urls) {
+    const anexosResolvidos = [];
+    const urlsParaWorker = [];
+
+    await Promise.all(
+      urls.map(async (u) => {
+        try {
+          const r = await fetch(u, { mode: 'cors', credentials: 'omit' });
+          if (!r.ok) throw new Error('status');
+          const blob = await r.blob();
+          if (!blob.type.startsWith('image/') || blob.size < 100) {
+            throw new Error('tipo');
+          }
+          const proc = await processarArquivo(blob);
+          anexosResolvidos.push(proc);
+        } catch {
+          urlsParaWorker.push(u);
+        }
+      })
+    );
+
+    return { anexosResolvidos, urlsParaWorker };
+  }
+
+  async function enviarPacoteParaIA({ textos, anexos, imageUrls, pAlvo }) {
     const alvo = pAlvo || obterParagrafoAlvo();
-    if (!jaMostrouLoading) {
-      mostrarCarregando(alvo);
-    }
+    requisicaoId++;
     const meuId = requisicaoId;
 
+    modoAcumular = false;
+    paragrafoAcumular = null;
+    filaTextos = [];
+    filaAnexos = [];
+    filaImageUrls = [];
+
+    mostrarStatusInline(alvo, '...');
+
     try {
+      let listaAnexos = Array.isArray(anexos) ? [...anexos] : [];
+      let listaUrls = [];
+
+      if (Array.isArray(imageUrls) && imageUrls.length > 0) {
+        const res = await resolverUrlsNoNavegadorOuWorker(imageUrls);
+        if (meuId !== requisicaoId) return;
+        listaAnexos.push(...res.anexosResolvidos);
+        listaUrls = res.urlsParaWorker;
+      }
+
+      const textoFinal = (textos || []).filter(Boolean).join('\n\n').trim();
+
       const resp = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          texto: texto || '',
-          anexo: anexo || null
+          texto: textoFinal,
+          anexos: listaAnexos,
+          imageUrls: listaUrls
         })
       });
 
       const data = await resp.json();
-      if (meuId !== requisicaoId) return; // Já foi cancelado/limpo
+      if (meuId !== requisicaoId) return;
 
       if (!resp.ok) {
         throw new Error(data?.error || 'erro');
@@ -304,8 +381,21 @@
     }
   }
 
-  // Abre cursor de edição camuflado no fim de um parágrafo (Alt + Clique ou Alt + Q)
-  function abrirEditorCamuflado(pAlvo) {
+  function ativarModoAcumular(pAlvo) {
+    limparTudo();
+    modoAcumular = true;
+    paragrafoAcumular = pAlvo || obterParagrafoAlvo();
+    mostrarStatusInline(paragrafoAcumular, '(0)');
+  }
+
+  function atualizarContadorAcumular() {
+    if (!modoAcumular || !paragrafoAcumular) return;
+    const total = filaTextos.length + filaAnexos.length + filaImageUrls.length;
+    mostrarStatusInline(paragrafoAcumular, `(${total})`);
+  }
+
+  // Abre cursor manual caso queira escrever do zero (Alt + Clique no parágrafo)
+  function abrirEditorManual(pAlvo) {
     const alvo = pAlvo || obterParagrafoAlvo();
     limparTudo();
 
@@ -332,7 +422,11 @@
         e.preventDefault();
         const txt = span.innerText.trim();
         if (txt) {
-          enviarParaIA(txt, null, alvo);
+          if (editorInline && editorInline.parentNode) {
+            editorInline.parentNode.removeChild(editorInline);
+          }
+          editorInline = null;
+          enviarPacoteParaIA({ textos: [txt], anexos: [], imageUrls: [], pAlvo: alvo });
         } else {
           limparTudo();
         }
@@ -340,37 +434,82 @@
     });
   }
 
-  // 1) Ctrl + V invisível em qualquer lugar da página (texto ou print!)
+  // Captura Ctrl + V (envio direto em 1 passo OU acumulador em etapas se Alt + Q estiver ativo)
   document.addEventListener('paste', async (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
+    const cd = e.clipboardData;
+    if (!cd) return;
 
-    // Verifica primeiro se há print/imagem ou PDF na área de transferência
-    for (const item of items) {
-      if (item.kind === 'file') {
-        const file = item.getAsFile();
-        if (file && (file.type.startsWith('image/') || file.type === 'application/pdf')) {
-          e.preventDefault();
-          enviarArquivoParaIA(file, obterParagrafoAlvo());
-          return;
+    // 1. Verifica se foi copiada uma imagem/PDF diretamente (ex: botão direito -> "Copiar imagem")
+    const arquivosCopiados = [];
+    if (cd.items) {
+      for (const item of cd.items) {
+        if (item.kind === 'file') {
+          const f = item.getAsFile();
+          if (f && (f.type.startsWith('image/') || f.type === 'application/pdf')) {
+            arquivosCopiados.push(f);
+          }
         }
       }
     }
 
-    // Se o editor manual estiver aberto, deixa colar texto dentro dele normalmente
+    if (arquivosCopiados.length > 0) {
+      e.preventDefault();
+      if (modoAcumular) {
+        const idAtual = requisicaoId;
+        for (const f of arquivosCopiados) {
+          const proc = await processarArquivo(f);
+          if (idAtual !== requisicaoId || !modoAcumular) return;
+          filaAnexos.push(proc);
+        }
+        atualizarContadorAcumular();
+      } else {
+        const alvo = obterParagrafoAlvo();
+        requisicaoId++;
+        const idAtual = requisicaoId;
+        mostrarStatusInline(alvo, '...');
+        const processados = [];
+        for (const f of arquivosCopiados) {
+          const proc = await processarArquivo(f);
+          if (idAtual !== requisicaoId) return;
+          processados.push(proc);
+        }
+        enviarPacoteParaIA({ textos: [], anexos: processados, imageUrls: [], pAlvo: alvo });
+      }
+      return;
+    }
+
     if (editorInline && document.activeElement === editorInline) {
       return;
     }
 
-    // Caso contrário, envia o texto colado direto e invisivelmente (sem mostrar a pergunta!)
-    const textoColado = e.clipboardData.getData('text/plain');
-    if (textoColado && textoColado.trim()) {
-      e.preventDefault();
-      enviarParaIA(textoColado.trim(), null, obterParagrafoAlvo());
+    // 2. Seleção de texto (e possíveis imagens HTML embutidas do Google Forms!)
+    const textoColado = (cd.getData('text/plain') || '').trim();
+    const htmlColado = cd.getData('text/html') || '';
+    const { dataAnexos, urlsRemotas } = extrairImagensDoHtmlCopiado(htmlColado);
+
+    if (!textoColado && dataAnexos.length === 0 && urlsRemotas.length === 0) {
+      return;
     }
+
+    e.preventDefault();
+
+    if (modoAcumular) {
+      if (textoColado) filaTextos.push(textoColado);
+      if (dataAnexos.length) filaAnexos.push(...dataAnexos);
+      if (urlsRemotas.length) filaImageUrls.push(...urlsRemotas);
+      atualizarContadorAcumular();
+      return;
+    }
+
+    enviarPacoteParaIA({
+      textos: textoColado ? [textoColado] : [],
+      anexos: dataAnexos,
+      imageUrls: urlsRemotas,
+      pAlvo: obterParagrafoAlvo()
+    });
   });
 
-  // 2) Alt + Clique em qualquer parágrafo abre o cursor invisível ali mesmo
+  // Alt + Clique abre cursor manual caso precise digitar algo
   document.addEventListener(
     'mousedown',
     (e) => {
@@ -379,23 +518,22 @@
         if (p) {
           e.preventDefault();
           e.stopPropagation();
-          abrirEditorCamuflado(p);
-          return;
+          abrirEditorManual(p);
         }
       }
     },
     true
   );
 
-  // 3) Clique em qualquer lugar FORA da resposta/editor limpa tudo instantaneamente (0ms)
+  // Clicar fora apaga tudo na hora (0ms)
   document.addEventListener(
     'pointerdown',
     (e) => {
       if (e.altKey) return;
-      const clicouDentroAtivo = elementoAtivo && elementoAtivo.contains(e.target);
-      const clicouDentroEditor = editorInline && editorInline.contains(e.target);
-      if (!clicouDentroAtivo && !clicouDentroEditor) {
-        if (elementoAtivo || editorInline) {
+      const dentroAtivo = elementoAtivo && elementoAtivo.contains(e.target);
+      const dentroEditor = editorInline && editorInline.contains(e.target);
+      if (!dentroAtivo && !dentroEditor) {
+        if (elementoAtivo || editorInline || modoAcumular) {
           limparTudo();
         }
       }
@@ -403,18 +541,34 @@
     true
   );
 
-  // 4) Atalhos de teclado: Esc (limpa), Alt + Q (cursor manual), Alt + A (anexar PDF/imagem)
+  // Atalhos:
+  // - Alt + Q: Modo Juntar Partes (vários Ctrl+V silenciosos + Enter para enviar tudo junto)
+  // - Enter (quando no Modo Juntar Partes): envia tudo que foi colado
+  // - Alt + A: anexar arquivo PDF/imagem
+  // - Esc: limpa tudo na hora
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (elementoAtivo || editorInline) {
+      if (elementoAtivo || editorInline || modoAcumular) {
         limparTudo();
       }
     } else if (e.altKey && (e.key === 'q' || e.key === 'Q')) {
       e.preventDefault();
-      if (editorInline) {
+      if (modoAcumular) {
         limparTudo();
       } else {
-        abrirEditorCamuflado(obterParagrafoAlvo());
+        ativarModoAcumular(obterParagrafoAlvo());
+      }
+    } else if (e.key === 'Enter' && modoAcumular && !editorInline) {
+      e.preventDefault();
+      if (filaTextos.length > 0 || filaAnexos.length > 0 || filaImageUrls.length > 0) {
+        enviarPacoteParaIA({
+          textos: [...filaTextos],
+          anexos: [...filaAnexos],
+          imageUrls: [...filaImageUrls],
+          pAlvo: paragrafoAcumular
+        });
+      } else {
+        limparTudo();
       }
     } else if (e.altKey && (e.key === 'a' || e.key === 'A')) {
       e.preventDefault();
@@ -422,10 +576,16 @@
     }
   });
 
-  fileInput.addEventListener('change', () => {
+  fileInput.addEventListener('change', async () => {
     const file = fileInput.files && fileInput.files[0];
     fileInput.value = '';
     if (!file) return;
-    enviarArquivoParaIA(file, obterParagrafoAlvo());
+    const alvo = obterParagrafoAlvo();
+    requisicaoId++;
+    const idAtual = requisicaoId;
+    mostrarStatusInline(alvo, '...');
+    const proc = await processarArquivo(file);
+    if (idAtual !== requisicaoId) return;
+    enviarPacoteParaIA({ textos: [], anexos: [proc], imageUrls: [], pAlvo: alvo });
   });
 })();
