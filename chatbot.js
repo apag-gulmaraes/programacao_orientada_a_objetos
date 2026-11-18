@@ -404,6 +404,19 @@
     panel.classList.remove('open');
   });
 
+  // Esconde instantaneamente ao clicar/tocar em qualquer lugar fora do painel
+  document.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (!panel.classList.contains('open')) return;
+      const caminho = e.composedPath ? e.composedPath() : [];
+      if (!caminho.includes(panel) && !caminho.includes(triggerBtn)) {
+        panel.classList.remove('open');
+      }
+    },
+    true
+  );
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && panel.classList.contains('open')) {
       panel.classList.remove('open');
