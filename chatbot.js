@@ -1,23 +1,16 @@
 /**
  * ============================================================================
- * MODO CAMUFLADO NO TEXTO DA APOSTILA (OTIMIZADO PARA GOOGLE FORMS / LINUX)
+ * MODO CAMUFLADO V6 - MULTI-QUESTÕES, PONTO FIXO PRECISO E ANTI-FALHA TOTAL
  * ============================================================================
- * 1. JEITO AUTOMÁTICO (1 único Ctrl+C -> Ctrl+V):
- *    Selecione a questão inteira no Google Forms (texto + imagem no meio +
- *    alternativas), aperte Ctrl+C e dê Ctrl+V direto na apostila.
- *    O script extrai automaticamente tanto o texto quanto o <img> embutido no
- *    HTML copiado do Google Forms!
- *
- * 2. JEITO EM ETAPAS (Alt + Q -> vários Ctrl+V -> Enter):
- *    Ideal quando quiser copiar separado (ex: copiar texto + botão direito na
- *    imagem "Copiar imagem") sem abrir ferramenta de print:
- *    - Aperte Alt + Q: aparece um discreto "(0)" no fim do parágrafo.
- *    - Dê Ctrl + V do texto -> vira "(1)" (sem mostrar o texto na tela!).
- *    - Clique direito na imagem -> "Copiar imagem" -> dê Ctrl + V -> vira "(2)".
- *    - Aperte Enter -> envia tudo junto de uma vez e mostra a resposta exata!
- *
- * 3. CLIQUE EM CIMA DA RESPOSTA: copia limpo (Ctrl+C) e já apaga da tela!
- * 4. CLIQUE FORA OU ESC: apaga tudo instantaneamente (0ms)!
+ * - Ponto Fixo ("·"): clique simples em qualquer parágrafo move o discreto "·"
+ *   para o fim dele. É SEMPRE ali que a resposta vai aparecer!
+ * - Nunca some sozinho: clicar na página, trocar de aba ou copiar respostas
+ *   NUNCA apaga as respostas por acidente.
+ * - Para esconder na hora (0ms): aperte ESC ou dê DUPLO CLIQUE no fundo branco.
+ * - Várias questões de uma vez: pode dar Ctrl+A -> Ctrl+C no formulário inteiro
+ *   e Ctrl+V aqui — ele resolve todas na ordem (incluindo imagens no meio!).
+ * - Modo Juntar Partes (Alt + Q): vários Ctrl+V silenciosos + Enter.
+ * - Clique em qualquer resposta/item da lista: copia limpo (Ctrl+C) e marca "✓".
  * ============================================================================
  */
 
@@ -38,18 +31,25 @@
   if (window.__pooCamoInit) return;
   window.__pooCamoInit = true;
 
-  let ultimoParagrafoHover = null;
-  let elementoAtivo = null;
+  // Remove o destaque azul de seleção dentro da própria apostila
+  const styleEl = document.createElement('style');
+  styleEl.textContent = `
+    ::selection { background: rgba(0,0,0,0.06); color: inherit; }
+    [data-ai-pin] { opacity: 0.35; user-select: none; font-weight: normal; }
+    [data-ai-camo="ans-item"]:hover { opacity: 0.85; }
+  `;
+  document.head.appendChild(styleEl);
+
+  let paragrafoFixo = null;
+  let marcadorPin = null;
+  let elementosResposta = []; // Pode guardar o span/bloco criado
   let editorInline = null;
-  let textoParaCopiar = '';
   let requisicaoId = 0;
 
   // Estado do Modo Juntar Partes (Alt + Q)
   let modoAcumular = false;
-  let paragrafoAcumular = null;
   let filaTextos = [];
-  let filaAnexos = [];
-  let filaImageUrls = [];
+  let filaImagensOrdenadas = [];
 
   const fileInput = document.createElement('input');
   fileInput.type = 'file';
@@ -57,58 +57,70 @@
   fileInput.style.display = 'none';
   document.body.appendChild(fileInput);
 
-  document.addEventListener(
-    'mouseover',
-    (e) => {
-      const p = e.target && e.target.closest ? e.target.closest('#content p') : null;
-      if (p && !p.closest('[data-ai-camo]')) {
-        ultimoParagrafoHover = p;
-      }
-    },
-    { passive: true }
-  );
-
-  function obterParagrafoAlvo() {
-    if (ultimoParagrafoHover && document.body.contains(ultimoParagrafoHover)) {
-      return ultimoParagrafoHover;
-    }
-    const paragrafos = Array.from(document.querySelectorAll('#content p')).filter(
+  function todosParagrafosReais() {
+    return Array.from(document.querySelectorAll('#content p')).filter(
       (p) => !p.closest('[data-ai-camo]')
     );
-    for (const p of paragrafos) {
-      const r = p.getBoundingClientRect();
-      if (r.bottom > 30 && r.top < window.innerHeight - 30) {
-        return p;
-      }
+  }
+
+  // Define exatamente em qual parágrafo o "·" fica fixado
+  function definirParagrafoFixo(p) {
+    if (!p || p.closest('[data-ai-camo]')) return;
+    paragrafoFixo = p;
+    if (!marcadorPin) {
+      marcadorPin = document.createElement('span');
+      marcadorPin.setAttribute('data-ai-pin', '1');
+      marcadorPin.textContent = ' ·';
     }
-    return paragrafos[0] || document.body;
+    if (marcadorPin.parentNode !== p) {
+      p.appendChild(marcadorPin);
+    }
+  }
+
+  function obterParagrafoAlvo() {
+    if (paragrafoFixo && document.body.contains(paragrafoFixo)) {
+      return paragrafoFixo;
+    }
+    const lista = todosParagrafosReais();
+    const primeiro = lista[0] || document.body;
+    if (lista[0]) definirParagrafoFixo(lista[0]);
+    return primeiro;
+  }
+
+  // Inicializa o Ponto Fixo no 1º parágrafo logo ao abrir a página
+  const inicial = todosParagrafosReais()[0];
+  if (inicial) {
+    definirParagrafoFixo(inicial);
   }
 
   function obterBlocoPaiParaInsercao(p) {
     return p.closest('.paragraph, .olist, .ulist, .listingblock, .openblock') || p;
   }
 
+  function removerElementosResposta() {
+    for (const el of elementosResposta) {
+      if (el && el.parentNode) {
+        el.parentNode.removeChild(el);
+      }
+    }
+    elementosResposta = [];
+  }
+
   function limparTudo() {
     requisicaoId++;
     modoAcumular = false;
-    paragrafoAcumular = null;
     filaTextos = [];
-    filaAnexos = [];
-    filaImageUrls = [];
-
-    if (elementoAtivo && elementoAtivo.parentNode) {
-      elementoAtivo.parentNode.removeChild(elementoAtivo);
-    }
-    elementoAtivo = null;
+    filaImagensOrdenadas = [];
+    removerElementosResposta();
 
     if (editorInline && editorInline.parentNode) {
       editorInline.parentNode.removeChild(editorInline);
     }
     editorInline = null;
-    textoParaCopiar = '';
   }
 
-  function copiarTextoFallback(str) {
+  function copiarTextoSeguro(str) {
+    if (!str) return;
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(str).catch(() => {});
     }
@@ -125,85 +137,163 @@
     document.body.removeChild(ta);
   }
 
-  function anexarCliqueCopiaESome(el) {
+  // Clique em uma resposta copia para o Ctrl+C e mostra um "✓" discreto por 1s SEM apagar a resposta!
+  function tornarClicavelParaCopiar(el, textoCopia) {
+    if (!textoCopia) return;
+    el.setAttribute('data-ai-camo', 'ans-item');
+    el.style.cursor = 'pointer';
+    el.title = 'Clique para copiar';
     el.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (textoParaCopiar) {
-        copiarTextoFallback(textoParaCopiar);
+      copiarTextoSeguro(textoCopia);
+
+      let check = el.querySelector('[data-ai-ok]');
+      if (!check) {
+        check = document.createElement('span');
+        check.setAttribute('data-ai-ok', '1');
+        check.textContent = ' ✓';
+        check.style.opacity = '0.55';
+        check.style.fontSize = '0.85em';
+        el.appendChild(check);
+        setTimeout(() => {
+          if (check && check.parentNode) check.parentNode.removeChild(check);
+        }, 1100);
       }
-      limparTudo();
     });
   }
 
   function mostrarStatusInline(pAlvo, textoCurto) {
-    if (elementoAtivo && elementoAtivo.parentNode) {
-      elementoAtivo.parentNode.removeChild(elementoAtivo);
-    }
+    removerElementosResposta();
     const span = document.createElement('span');
     span.setAttribute('data-ai-camo', 'status');
     span.textContent = ` ${textoCurto}`;
     span.style.opacity = '0.45';
+    span.style.userSelect = 'none';
     pAlvo.appendChild(span);
-    elementoAtivo = span;
+    elementosResposta.push(span);
   }
 
-  function renderizarRespostaCamuflada(pAlvo, dados) {
-    if (elementoAtivo && elementoAtivo.parentNode) {
-      elementoAtivo.parentNode.removeChild(elementoAtivo);
-    }
-    elementoAtivo = null;
+  function truncar(str, max) {
+    const s = String(str || '').replace(/\s+/g, ' ').trim();
+    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+  }
 
-    const tipo = dados.tipo || 'DISCURSIVA';
-    const exibicao = String(dados.text || '').trim();
-    textoParaCopiar = String(dados.copy || exibicao).trim();
-
-    if (!exibicao) return;
-
-    if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO' || exibicao.length <= 28) {
-      const span = document.createElement('span');
-      span.setAttribute('data-ai-camo', 'ans');
-      const formatado = exibicao.startsWith('(') ? ` ${exibicao}` : ` (${exibicao})`;
-      span.textContent = formatado;
-      span.style.cursor = 'text';
-      anexarCliqueCopiaESome(span);
-      pAlvo.appendChild(span);
-      elementoAtivo = span;
-      return;
-    }
+  function renderizarQuestoesCamufladas(pAlvo, questoes) {
+    removerElementosResposta();
+    if (!Array.isArray(questoes) || questoes.length === 0) return;
 
     const blocoRef = obterBlocoPaiParaInsercao(pAlvo);
 
-    if (tipo === 'CODIGO_JAVA') {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'listingblock';
-      wrapper.setAttribute('data-ai-camo', 'ans');
-      const content = document.createElement('div');
-      content.className = 'content';
-      const pre = document.createElement('pre');
-      pre.className = 'highlight';
-      const code = document.createElement('code');
-      code.textContent = exibicao;
-      pre.appendChild(code);
-      content.appendChild(pre);
-      wrapper.appendChild(content);
-      wrapper.style.cursor = 'text';
-      anexarCliqueCopiaESome(wrapper);
-      blocoRef.insertAdjacentElement('afterend', wrapper);
-      elementoAtivo = wrapper;
+    // CASO A: Apenas 1 questão enviada
+    if (questoes.length === 1) {
+      const q = questoes[0];
+      const tipo = q.tipo || 'DISCURSIVA';
+      const pos = Array.isArray(q.posicoes) ? q.posicoes : [];
+      const copy = String(q.copy || '').trim();
+
+      if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO') {
+        const span = document.createElement('span');
+        const numStr = pos.length > 0 ? `p. ${pos.join(', ')}` : 'ref.';
+        const trechoOpcao = copy ? ` — ${truncar(copy, 65)}` : '';
+        span.textContent = ` (${numStr}${trechoOpcao})`;
+        tornarClicavelParaCopiar(span, copy || numStr);
+        pAlvo.appendChild(span);
+        elementosResposta.push(span);
+        return;
+      }
+
+      if (tipo === 'CODIGO_JAVA') {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'listingblock';
+        wrapper.setAttribute('data-ai-camo', 'ans');
+        const content = document.createElement('div');
+        content.className = 'content';
+        const pre = document.createElement('pre');
+        pre.className = 'highlight';
+        const code = document.createElement('code');
+        code.textContent = copy;
+        pre.appendChild(code);
+        content.appendChild(pre);
+        wrapper.appendChild(content);
+        tornarClicavelParaCopiar(wrapper, copy);
+        blocoRef.insertAdjacentElement('afterend', wrapper);
+        elementosResposta.push(wrapper);
+        return;
+      }
+
+      const divP = document.createElement('div');
+      divP.className = 'paragraph';
+      divP.setAttribute('data-ai-camo', 'ans');
+      const pNovo = document.createElement('p');
+      pNovo.textContent = copy;
+      divP.appendChild(pNovo);
+      tornarClicavelParaCopiar(divP, copy);
+      blocoRef.insertAdjacentElement('afterend', divP);
+      elementosResposta.push(divP);
       return;
     }
 
-    const divP = document.createElement('div');
-    divP.className = 'paragraph';
-    divP.setAttribute('data-ai-camo', 'ans');
-    const pNovo = document.createElement('p');
-    pNovo.textContent = exibicao;
-    divP.appendChild(pNovo);
-    divP.style.cursor = 'text';
-    anexarCliqueCopiaESome(divP);
-    blocoRef.insertAdjacentElement('afterend', divP);
-    elementoAtivo = divP;
+    // CASO B: VÁRIAS questões enviadas de uma vez -> Lista numerada idêntica à apostila!
+    const olist = document.createElement('div');
+    olist.className = 'olist arabic';
+    olist.setAttribute('data-ai-camo', 'ans');
+    const ol = document.createElement('ol');
+    ol.className = 'arabic';
+
+    for (const q of questoes) {
+      const li = document.createElement('li');
+      const pItem = document.createElement('p');
+      const tipo = q.tipo || 'DISCURSIVA';
+      const pos = Array.isArray(q.posicoes) ? q.posicoes : [];
+      const copy = String(q.copy || '').trim();
+      const resumo = truncar(q.resumo || '', 52);
+
+      if (resumo) {
+        const em = document.createElement('em');
+        em.style.opacity = '0.7';
+        em.textContent = `${resumo}: `;
+        pItem.appendChild(em);
+      }
+
+      if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO') {
+        const strong = document.createElement('strong');
+        strong.textContent = pos.length > 0 ? `(p. ${pos.join(', ')})` : '(ref.)';
+        pItem.appendChild(strong);
+        if (copy) {
+          pItem.appendChild(document.createTextNode(` — ${truncar(copy, 75)}`));
+        }
+        tornarClicavelParaCopiar(pItem, copy);
+        li.appendChild(pItem);
+      } else if (tipo === 'CODIGO_JAVA') {
+        pItem.appendChild(document.createTextNode('Exemplo de implementação (clique para copiar):'));
+        li.appendChild(pItem);
+
+        const preWrap = document.createElement('div');
+        preWrap.className = 'listingblock';
+        const content = document.createElement('div');
+        content.className = 'content';
+        const pre = document.createElement('pre');
+        pre.className = 'highlight';
+        const code = document.createElement('code');
+        code.textContent = copy;
+        pre.appendChild(code);
+        content.appendChild(pre);
+        preWrap.appendChild(content);
+        tornarClicavelParaCopiar(preWrap, copy);
+        li.appendChild(preWrap);
+      } else {
+        pItem.appendChild(document.createTextNode(copy));
+        tornarClicavelParaCopiar(pItem, copy);
+        li.appendChild(pItem);
+      }
+
+      ol.appendChild(li);
+    }
+
+    olist.appendChild(ol);
+    blocoRef.insertAdjacentElement('afterend', olist);
+    elementosResposta.push(olist);
   }
 
   function fileToBase64(file) {
@@ -221,7 +311,7 @@
   function processarArquivo(file) {
     return new Promise(async (resolve, reject) => {
       try {
-        if (!file.type.startsWith('image/') || file.size <= 800 * 1024) {
+        if (!file.type.startsWith('image/') || file.size <= 600 * 1024) {
           const base64 = await fileToBase64(file);
           return resolve({
             mimeType: file.type || 'application/octet-stream',
@@ -233,7 +323,7 @@
         const img = new Image();
         img.onload = () => {
           URL.revokeObjectURL(url);
-          const maxDim = 1800;
+          const maxDim = 1500;
           let { width, height } = img;
           if (width > maxDim || height > maxDim) {
             const scale = Math.min(maxDim / width, maxDim / height);
@@ -247,7 +337,7 @@
           ctx.fillStyle = '#ffffff';
           ctx.fillRect(0, 0, width, height);
           ctx.drawImage(img, 0, 0, width, height);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
           resolve({
             mimeType: 'image/jpeg',
             data: dataUrl.split(',')[1] || ''
@@ -268,133 +358,160 @@
     });
   }
 
-  // Extrai imagens embutidas no HTML quando você seleciona texto + imagem juntos no Google Forms
-  function extrairImagensDoHtmlCopiado(html) {
-    const dataAnexos = [];
-    const urlsRemotas = [];
-    if (!html) return { dataAnexos, urlsRemotas };
+  // Extrai texto + imagens preservando a EXATA posição de cada imagem ([IMAGEM_1], [IMAGEM_2]...)
+  function extrairConteudoOrdenadoDoHtml(html, plainFallback, indiceInicial) {
+    const imagens = [];
+    if (!html) {
+      return { textoComMarcadores: plainFallback || '', imagens };
+    }
 
     try {
       const doc = new DOMParser().parseFromString(html, 'text/html');
+      doc.querySelectorAll('script, style, noscript, svg').forEach((n) => n.remove());
+
       const imgs = Array.from(doc.querySelectorAll('img'));
+      let contador = indiceInicial || 0;
+
       for (const img of imgs) {
         const src = (img.getAttribute('src') || '').trim();
         if (!src) continue;
+        const w = Number(img.getAttribute('width') || 0);
+        const h = Number(img.getAttribute('height') || 0);
+        if ((w > 0 && w < 24) || (h > 0 && h < 24)) continue;
+
         if (src.startsWith('data:image/')) {
           const partes = src.split(',');
           const mimeMatch = partes[0].match(/^data:(image\/[^;]+);base64$/i);
           if (mimeMatch && partes[1]) {
-            dataAnexos.push({ mimeType: mimeMatch[1], data: partes[1] });
+            contador++;
+            imagens.push({ mimeType: mimeMatch[1], data: partes[1] });
+            img.replaceWith(doc.createTextNode(`\n[IMAGEM_${contador}]\n`));
           }
         } else if (/^https?:\/\//i.test(src)) {
-          // Ignora ícones minúsculos de interface se tiverem largura/altura declarada < 24px
-          const w = Number(img.getAttribute('width') || 0);
-          const h = Number(img.getAttribute('height') || 0);
-          if ((w > 0 && w < 24) || (h > 0 && h < 24)) continue;
-          urlsRemotas.push(src);
+          contador++;
+          imagens.push({ url: src });
+          img.replaceWith(doc.createTextNode(`\n[IMAGEM_${contador}]\n`));
         }
       }
-    } catch {}
 
-    return {
-      dataAnexos: dataAnexos.slice(0, 4),
-      urlsRemotas: [...new Set(urlsRemotas)].slice(0, 4)
-    };
+      if (imagens.length === 0) {
+        return { textoComMarcadores: plainFallback || '', imagens: [] };
+      }
+
+      // Garante quebras de linha limpas entre blocos HTML do Google Forms
+      doc
+        .querySelectorAll('div, p, li, br, h1, h2, h3, h4, tr, section, article')
+        .forEach((el) => {
+          if (el.tagName === 'BR') {
+            el.replaceWith(doc.createTextNode('\n'));
+          } else {
+            el.appendChild(doc.createTextNode('\n'));
+          }
+        });
+
+      const extraido = (doc.body.textContent || '')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+
+      return {
+        textoComMarcadores: extraido || plainFallback || '',
+        imagens: imagens.slice(0, 20)
+      };
+    } catch {
+      return { textoComMarcadores: plainFallback || '', imagens: [] };
+    }
   }
 
-  // Tenta baixar no navegador se tiver permissão CORS; o que não der vai via Worker
-  async function resolverUrlsNoNavegadorOuWorker(urls) {
-    const anexosResolvidos = [];
-    const urlsParaWorker = [];
-
-    await Promise.all(
-      urls.map(async (u) => {
-        try {
-          const r = await fetch(u, { mode: 'cors', credentials: 'omit' });
-          if (!r.ok) throw new Error('status');
-          const blob = await r.blob();
-          if (!blob.type.startsWith('image/') || blob.size < 100) {
-            throw new Error('tipo');
+  // Tenta resolver imagens remotas no navegador; se bloquear por CORS, o Worker baixa!
+  async function prepararImagensOrdenadas(listaBruta) {
+    return await Promise.all(
+      listaBruta.slice(0, 20).map(async (item) => {
+        if (item.data && item.mimeType) return item;
+        if (item.url) {
+          try {
+            const r = await fetch(item.url, { mode: 'cors', credentials: 'omit' });
+            if (!r.ok) throw new Error('status');
+            const blob = await r.blob();
+            if (!blob.type.startsWith('image/') || blob.size < 80) throw new Error('tipo');
+            return await processarArquivo(blob);
+          } catch {
+            return { url: item.url };
           }
-          const proc = await processarArquivo(blob);
-          anexosResolvidos.push(proc);
-        } catch {
-          urlsParaWorker.push(u);
         }
+        return null;
       })
     );
-
-    return { anexosResolvidos, urlsParaWorker };
   }
 
-  async function enviarPacoteParaIA({ textos, anexos, imageUrls, pAlvo }) {
+  // Fetch com 3 tentativas automáticas para nunca falhar por oscilação de rede
+  async function fetchComRetry(payload, tentativas = 3) {
+    let ultimoErro = null;
+    for (let i = 0; i < tentativas; i++) {
+      try {
+        const resp = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (resp.ok && data && Array.isArray(data.questoes) && data.questoes.length > 0) {
+          return data;
+        }
+        ultimoErro = new Error(data?.error || `HTTP ${resp.status}`);
+      } catch (err) {
+        ultimoErro = err;
+      }
+      if (i < tentativas - 1) {
+        await new Promise((r) => setTimeout(r, 900 * (i + 1)));
+      }
+    }
+    throw ultimoErro || new Error('Falha de conexão');
+  }
+
+  async function enviarPacoteParaIA({ textos, imagensBrutas, pAlvo }) {
     const alvo = pAlvo || obterParagrafoAlvo();
     requisicaoId++;
     const meuId = requisicaoId;
 
     modoAcumular = false;
-    paragrafoAcumular = null;
     filaTextos = [];
-    filaAnexos = [];
-    filaImageUrls = [];
+    filaImagensOrdenadas = [];
 
     mostrarStatusInline(alvo, '...');
 
     try {
-      let listaAnexos = Array.isArray(anexos) ? [...anexos] : [];
-      let listaUrls = [];
-
-      if (Array.isArray(imageUrls) && imageUrls.length > 0) {
-        const res = await resolverUrlsNoNavegadorOuWorker(imageUrls);
-        if (meuId !== requisicaoId) return;
-        listaAnexos.push(...res.anexosResolvidos);
-        listaUrls = res.urlsParaWorker;
-      }
+      const imagensOrdenadas = (await prepararImagensOrdenadas(imagensBrutas || [])).filter(Boolean);
+      if (meuId !== requisicaoId) return;
 
       const textoFinal = (textos || []).filter(Boolean).join('\n\n').trim();
 
-      const resp = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          texto: textoFinal,
-          anexos: listaAnexos,
-          imageUrls: listaUrls
-        })
+      const data = await fetchComRetry({
+        texto: textoFinal,
+        imagensOrdenadas
       });
 
-      const data = await resp.json();
       if (meuId !== requisicaoId) return;
-
-      if (!resp.ok) {
-        throw new Error(data?.error || 'erro');
-      }
-
-      renderizarRespostaCamuflada(alvo, data);
+      renderizarQuestoesCamufladas(alvo, data.questoes);
     } catch {
       if (meuId !== requisicaoId) return;
-      renderizarRespostaCamuflada(alvo, {
-        tipo: 'MULTIPLA_ESCOLHA',
-        text: '(—)',
-        copy: ''
-      });
+      mostrarStatusInline(alvo, '(tente novamente)');
     }
   }
 
   function ativarModoAcumular(pAlvo) {
     limparTudo();
     modoAcumular = true;
-    paragrafoAcumular = pAlvo || obterParagrafoAlvo();
-    mostrarStatusInline(paragrafoAcumular, '(0)');
+    const alvo = pAlvo || obterParagrafoAlvo();
+    mostrarStatusInline(alvo, '(0)');
   }
 
   function atualizarContadorAcumular() {
-    if (!modoAcumular || !paragrafoAcumular) return;
-    const total = filaTextos.length + filaAnexos.length + filaImageUrls.length;
-    mostrarStatusInline(paragrafoAcumular, `(${total})`);
+    if (!modoAcumular) return;
+    const total = filaTextos.length + filaImagensOrdenadas.length;
+    mostrarStatusInline(obterParagrafoAlvo(), `(${total})`);
   }
 
-  // Abre cursor manual caso queira escrever do zero (Alt + Clique no parágrafo)
   function abrirEditorManual(pAlvo) {
     const alvo = pAlvo || obterParagrafoAlvo();
     limparTudo();
@@ -426,7 +543,7 @@
             editorInline.parentNode.removeChild(editorInline);
           }
           editorInline = null;
-          enviarPacoteParaIA({ textos: [txt], anexos: [], imageUrls: [], pAlvo: alvo });
+          enviarPacoteParaIA({ textos: [txt], imagensBrutas: [], pAlvo: alvo });
         } else {
           limparTudo();
         }
@@ -434,12 +551,47 @@
     });
   }
 
-  // Captura Ctrl + V (envio direto em 1 passo OU acumulador em etapas se Alt + Q estiver ativo)
+  // 1) Clique simples em qualquer parágrafo fixa o "·" nele (NUNCA apaga respostas abertas!)
+  document.addEventListener('click', (e) => {
+    if (e.altKey) return;
+    if (e.target && e.target.closest && e.target.closest('a, [data-ai-camo]')) return;
+    const p = e.target && e.target.closest ? e.target.closest('#content p') : null;
+    if (p) {
+      definirParagrafoFixo(p);
+    }
+  });
+
+  // 2) Alt + Clique abre cursor manual caso precise digitar algo do zero
+  document.addEventListener(
+    'mousedown',
+    (e) => {
+      if (e.altKey) {
+        const p = e.target && e.target.closest ? e.target.closest('#content p') : null;
+        if (p) {
+          e.preventDefault();
+          e.stopPropagation();
+          definirParagrafoFixo(p);
+          abrirEditorManual(p);
+        }
+      }
+    },
+    true
+  );
+
+  // 3) Duplo clique em qualquer área vazia fora de respostas esconde tudo em 0ms
+  document.addEventListener('dblclick', (e) => {
+    if (e.target && e.target.closest && e.target.closest('[data-ai-camo]')) return;
+    const sel = window.getSelection ? String(window.getSelection()) : '';
+    if (!sel.trim() && (elementosResposta.length > 0 || editorInline || modoAcumular)) {
+      limparTudo();
+    }
+  });
+
+  // 4) Ctrl + V (1 questão, formulário inteiro com várias questões + imagens, ou Modo Juntar Partes)
   document.addEventListener('paste', async (e) => {
     const cd = e.clipboardData;
     if (!cd) return;
 
-    // 1. Verifica se foi copiada uma imagem/PDF diretamente (ex: botão direito -> "Copiar imagem")
     const arquivosCopiados = [];
     if (cd.items) {
       for (const item of cd.items) {
@@ -459,7 +611,8 @@
         for (const f of arquivosCopiados) {
           const proc = await processarArquivo(f);
           if (idAtual !== requisicaoId || !modoAcumular) return;
-          filaAnexos.push(proc);
+          filaImagensOrdenadas.push(proc);
+          filaTextos.push(`[IMAGEM_${filaImagensOrdenadas.length}]`);
         }
         atualizarContadorAcumular();
       } else {
@@ -473,7 +626,7 @@
           if (idAtual !== requisicaoId) return;
           processados.push(proc);
         }
-        enviarPacoteParaIA({ textos: [], anexos: processados, imageUrls: [], pAlvo: alvo });
+        enviarPacoteParaIA({ textos: [], imagensBrutas: processados, pAlvo: alvo });
       }
       return;
     }
@@ -482,75 +635,36 @@
       return;
     }
 
-    // 2. Seleção de texto (e possíveis imagens HTML embutidas do Google Forms!)
-    const textoColado = (cd.getData('text/plain') || '').trim();
+    const textoPlano = (cd.getData('text/plain') || '').trim();
     const htmlColado = cd.getData('text/html') || '';
-    const { dataAnexos, urlsRemotas } = extrairImagensDoHtmlCopiado(htmlColado);
+    const { textoComMarcadores, imagens } = extrairConteudoOrdenadoDoHtml(
+      htmlColado,
+      textoPlano,
+      modoAcumular ? filaImagensOrdenadas.length : 0
+    );
 
-    if (!textoColado && dataAnexos.length === 0 && urlsRemotas.length === 0) {
-      return;
-    }
+    if (!textoComMarcadores && imagens.length === 0) return;
 
     e.preventDefault();
 
     if (modoAcumular) {
-      if (textoColado) filaTextos.push(textoColado);
-      if (dataAnexos.length) filaAnexos.push(...dataAnexos);
-      if (urlsRemotas.length) filaImageUrls.push(...urlsRemotas);
+      if (textoComMarcadores) filaTextos.push(textoComMarcadores);
+      if (imagens.length) filaImagensOrdenadas.push(...imagens);
       atualizarContadorAcumular();
       return;
     }
 
     enviarPacoteParaIA({
-      textos: textoColado ? [textoColado] : [],
-      anexos: dataAnexos,
-      imageUrls: urlsRemotas,
+      textos: textoComMarcadores ? [textoComMarcadores] : [],
+      imagensBrutas: imagens,
       pAlvo: obterParagrafoAlvo()
     });
   });
 
-  // Alt + Clique abre cursor manual caso precise digitar algo
-  document.addEventListener(
-    'mousedown',
-    (e) => {
-      if (e.altKey) {
-        const p = e.target && e.target.closest ? e.target.closest('#content p') : null;
-        if (p) {
-          e.preventDefault();
-          e.stopPropagation();
-          abrirEditorManual(p);
-        }
-      }
-    },
-    true
-  );
-
-  // Clicar fora apaga tudo na hora (0ms)
-  document.addEventListener(
-    'pointerdown',
-    (e) => {
-      if (e.altKey) return;
-      const dentroAtivo = elementoAtivo && elementoAtivo.contains(e.target);
-      const dentroEditor = editorInline && editorInline.contains(e.target);
-      if (!dentroAtivo && !dentroEditor) {
-        if (elementoAtivo || editorInline || modoAcumular) {
-          limparTudo();
-        }
-      }
-    },
-    true
-  );
-
-  // Atalhos:
-  // - Alt + Q: Modo Juntar Partes (vários Ctrl+V silenciosos + Enter para enviar tudo junto)
-  // - Enter (quando no Modo Juntar Partes): envia tudo que foi colado
-  // - Alt + A: anexar arquivo PDF/imagem
-  // - Esc: limpa tudo na hora
+  // 5) Atalhos de teclado: Esc (esconde 0ms), Alt+Q (juntar partes), Enter (envia partes), Alt+A (PDF)
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      if (elementoAtivo || editorInline || modoAcumular) {
-        limparTudo();
-      }
+      limparTudo();
     } else if (e.altKey && (e.key === 'q' || e.key === 'Q')) {
       e.preventDefault();
       if (modoAcumular) {
@@ -560,12 +674,11 @@
       }
     } else if (e.key === 'Enter' && modoAcumular && !editorInline) {
       e.preventDefault();
-      if (filaTextos.length > 0 || filaAnexos.length > 0 || filaImageUrls.length > 0) {
+      if (filaTextos.length > 0 || filaImagensOrdenadas.length > 0) {
         enviarPacoteParaIA({
           textos: [...filaTextos],
-          anexos: [...filaAnexos],
-          imageUrls: [...filaImageUrls],
-          pAlvo: paragrafoAcumular
+          imagensBrutas: [...filaImagensOrdenadas],
+          pAlvo: obterParagrafoAlvo()
         });
       } else {
         limparTudo();
@@ -586,6 +699,6 @@
     mostrarStatusInline(alvo, '...');
     const proc = await processarArquivo(file);
     if (idAtual !== requisicaoId) return;
-    enviarPacoteParaIA({ textos: [], anexos: [proc], imageUrls: [], pAlvo: alvo });
+    enviarPacoteParaIA({ textos: [], imagensBrutas: [proc], pAlvo: alvo });
   });
 })();
