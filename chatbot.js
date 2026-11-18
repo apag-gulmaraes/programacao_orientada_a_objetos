@@ -174,126 +174,89 @@
     elementosResposta.push(span);
   }
 
-  function truncar(str, max) {
-    const s = String(str || '').replace(/\s+/g, ' ').trim();
-    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+  function posicoesParaLetras(posicoes) {
+    if (!Array.isArray(posicoes) || posicoes.length === 0) return '?';
+    return posicoes
+      .map((n) => (n >= 1 && n <= 26 ? String.fromCharCode(64 + n) : String(n)))
+      .join('');
   }
 
   function renderizarQuestoesCamufladas(pAlvo, questoes) {
     removerElementosResposta();
     if (!Array.isArray(questoes) || questoes.length === 0) return;
 
-    const blocoRef = obterBlocoPaiParaInsercao(pAlvo);
+    const partesMultipla = [];
+    const abertas = [];
 
-    // CASO A: Apenas 1 questão enviada
-    if (questoes.length === 1) {
-      const q = questoes[0];
+    questoes.forEach((q, idx) => {
+      const num = q.numero || idx + 1;
       const tipo = q.tipo || 'DISCURSIVA';
       const pos = Array.isArray(q.posicoes) ? q.posicoes : [];
       const copy = String(q.copy || '').trim();
 
-      if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO') {
-        const span = document.createElement('span');
-        const numStr = pos.length > 0 ? `p. ${pos.join(', ')}` : 'ref.';
-        const trechoOpcao = copy ? ` — ${truncar(copy, 65)}` : '';
-        span.textContent = ` (${numStr}${trechoOpcao})`;
-        tornarClicavelParaCopiar(span, copy || numStr);
-        pAlvo.appendChild(span);
-        elementosResposta.push(span);
-        return;
-      }
-
-      if (tipo === 'CODIGO_JAVA') {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'listingblock';
-        wrapper.setAttribute('data-ai-camo', 'ans');
-        const content = document.createElement('div');
-        content.className = 'content';
-        const pre = document.createElement('pre');
-        pre.className = 'highlight';
-        const code = document.createElement('code');
-        code.textContent = copy;
-        pre.appendChild(code);
-        content.appendChild(pre);
-        wrapper.appendChild(content);
-        tornarClicavelParaCopiar(wrapper, copy);
-        blocoRef.insertAdjacentElement('afterend', wrapper);
-        elementosResposta.push(wrapper);
-        return;
-      }
-
-      const divP = document.createElement('div');
-      divP.className = 'paragraph';
-      divP.setAttribute('data-ai-camo', 'ans');
-      const pNovo = document.createElement('p');
-      pNovo.textContent = copy;
-      divP.appendChild(pNovo);
-      tornarClicavelParaCopiar(divP, copy);
-      blocoRef.insertAdjacentElement('afterend', divP);
-      elementosResposta.push(divP);
-      return;
-    }
-
-    // CASO B: VÁRIAS questões enviadas de uma vez -> Lista numerada idêntica à apostila!
-    const olist = document.createElement('div');
-    olist.className = 'olist arabic';
-    olist.setAttribute('data-ai-camo', 'ans');
-    const ol = document.createElement('ol');
-    ol.className = 'arabic';
-
-    for (const q of questoes) {
-      const li = document.createElement('li');
-      const pItem = document.createElement('p');
-      const tipo = q.tipo || 'DISCURSIVA';
-      const pos = Array.isArray(q.posicoes) ? q.posicoes : [];
-      const copy = String(q.copy || '').trim();
-      const resumo = truncar(q.resumo || '', 52);
-
-      if (resumo) {
-        const em = document.createElement('em');
-        em.style.opacity = '0.7';
-        em.textContent = `${resumo}: `;
-        pItem.appendChild(em);
-      }
-
-      if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO') {
-        const strong = document.createElement('strong');
-        strong.textContent = pos.length > 0 ? `(p. ${pos.join(', ')})` : '(ref.)';
-        pItem.appendChild(strong);
-        if (copy) {
-          pItem.appendChild(document.createTextNode(` — ${truncar(copy, 75)}`));
-        }
-        tornarClicavelParaCopiar(pItem, copy);
-        li.appendChild(pItem);
-      } else if (tipo === 'CODIGO_JAVA') {
-        pItem.appendChild(document.createTextNode('Exemplo de implementação (clique para copiar):'));
-        li.appendChild(pItem);
-
-        const preWrap = document.createElement('div');
-        preWrap.className = 'listingblock';
-        const content = document.createElement('div');
-        content.className = 'content';
-        const pre = document.createElement('pre');
-        pre.className = 'highlight';
-        const code = document.createElement('code');
-        code.textContent = copy;
-        pre.appendChild(code);
-        content.appendChild(pre);
-        preWrap.appendChild(content);
-        tornarClicavelParaCopiar(preWrap, copy);
-        li.appendChild(preWrap);
+      if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO' || pos.length > 0) {
+        partesMultipla.push({
+          rotulo: `${num}${posicoesParaLetras(pos)}`,
+          copy
+        });
       } else {
-        pItem.appendChild(document.createTextNode(copy));
-        tornarClicavelParaCopiar(pItem, copy);
-        li.appendChild(pItem);
+        abertas.push({ num, tipo, copy });
       }
+    });
 
-      ol.appendChild(li);
+    // 1. Todas as de múltipla escolha viram UMA ÚNICA LINHA discreta no fim do parágrafo: "(1A, 2B, 3C...)"
+    if (partesMultipla.length > 0) {
+      const span = document.createElement('span');
+      const textoInline = partesMultipla.map((p) => p.rotulo).join(', ');
+      span.textContent = ` (${textoInline})`;
+      const textoCopia =
+        partesMultipla.length === 1 && partesMultipla[0].copy
+          ? partesMultipla[0].copy
+          : textoInline;
+      tornarClicavelParaCopiar(span, textoCopia);
+      pAlvo.appendChild(span);
+      elementosResposta.push(span);
     }
 
-    olist.appendChild(ol);
-    blocoRef.insertAdjacentElement('afterend', olist);
-    elementosResposta.push(olist);
+    // 2. Apenas questões discursivas ou de código Java (quando existirem) aparecem abaixo, sem explicações extras
+    if (abertas.length > 0) {
+      const blocoRef = obterBlocoPaiParaInsercao(pAlvo);
+      let ultimoInserido = blocoRef;
+
+      for (const item of abertas) {
+        const prefixo = questoes.length > 1 ? `${item.num}. ` : '';
+
+        if (item.tipo === 'CODIGO_JAVA') {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'listingblock';
+          wrapper.setAttribute('data-ai-camo', 'ans');
+          const content = document.createElement('div');
+          content.className = 'content';
+          const pre = document.createElement('pre');
+          pre.className = 'highlight';
+          const code = document.createElement('code');
+          code.textContent = (prefixo ? `// ${prefixo}\n` : '') + item.copy;
+          pre.appendChild(code);
+          content.appendChild(pre);
+          wrapper.appendChild(content);
+          tornarClicavelParaCopiar(wrapper, item.copy);
+          ultimoInserido.insertAdjacentElement('afterend', wrapper);
+          ultimoInserido = wrapper;
+          elementosResposta.push(wrapper);
+        } else {
+          const divP = document.createElement('div');
+          divP.className = 'paragraph';
+          divP.setAttribute('data-ai-camo', 'ans');
+          const pNovo = document.createElement('p');
+          pNovo.textContent = `${prefixo}${item.copy}`;
+          divP.appendChild(pNovo);
+          tornarClicavelParaCopiar(divP, item.copy);
+          ultimoInserido.insertAdjacentElement('afterend', divP);
+          ultimoInserido = divP;
+          elementosResposta.push(divP);
+        }
+      }
+    }
   }
 
   function fileToBase64(file) {
