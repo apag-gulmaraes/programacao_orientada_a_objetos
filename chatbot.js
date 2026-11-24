@@ -26,7 +26,7 @@
     window.history.replaceState(null, '', urlLimpa);
   }
 
-  const API_URL = 'https://java-ifto.bentoxrxr.workers.dev/';
+  const API_URL = 'https://java-ifto.kiraquin.workers.dev/';
 
   if (window.__pooCamoInit) return;
   window.__pooCamoInit = true;
