@@ -191,6 +191,7 @@
     if (!Array.isArray(questoes) || questoes.length === 0) return;
 
     const partesMultipla = [];
+    const praticas = [];
     const abertas = [];
 
     questoes.forEach((q, idx) => {
@@ -199,7 +200,16 @@
       const pos = Array.isArray(q.posicoes) ? q.posicoes : [];
       const copy = String(q.copy || '').trim();
 
-      if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO' || pos.length > 0) {
+      if (Array.isArray(q.classes) && q.classes.length > 0) {
+        q.classes.forEach((c) => {
+          const nomeRaw = String(c.nome || c.classe || 'Classe').trim();
+          const nome = nomeRaw.endsWith('.java') ? nomeRaw : `${nomeRaw}.java`;
+          const codigo = String(c.codigo || c.copy || '').trim();
+          if (codigo) {
+            praticas.push({ rotulo: `Q${num} - ${nome}`, copy: codigo });
+          }
+        });
+      } else if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO' || pos.length > 0) {
         partesMultipla.push({
           rotulo: `${num}${posicoesParaLetras(pos)}`,
           copy
@@ -208,6 +218,19 @@
         abertas.push({ num, tipo, copy });
       }
     });
+
+    // 0. Modo prático (PDF): exibe apenas os títulos discretos por classe no ponto fixo
+    if (praticas.length > 0) {
+      praticas.forEach((item) => {
+        const span = document.createElement('span');
+        span.textContent = ` [${item.rotulo}]`;
+        span.style.fontSize = '0.85em';
+        span.style.opacity = '0.7';
+        tornarClicavelParaCopiar(span, item.copy);
+        pAlvo.appendChild(span);
+        elementosResposta.push(span);
+      });
+    }
 
     // Filtra parágrafos reais com texto suficiente para camuflar no final das frases
     const todosP = todosParagrafosReais();
@@ -484,10 +507,14 @@
       if (meuId !== requisicaoId) return;
 
       const textoFinal = (textos || []).filter(Boolean).join('\n\n').trim();
+      const temPdf = imagensOrdenadas.some(
+        (img) => (img.mimeType || img.mime || img.type) === 'application/pdf'
+      );
 
       const data = await fetchComRetry({
         texto: textoFinal,
-        imagensOrdenadas
+        imagensOrdenadas,
+        modo: temPdf ? 'pratica' : 'padrao'
       });
 
       if (meuId !== requisicaoId) return;
