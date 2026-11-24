@@ -95,6 +95,9 @@
     return p.closest('.paragraph, .olist, .ulist, .listingblock, .openblock') || p;
   }
 
+  let tutorialAtivoEl = null;
+  let tutorialAtivoBtn = null;
+
   function removerElementosResposta() {
     for (const el of elementosResposta) {
       if (el && el.parentNode) {
@@ -102,6 +105,29 @@
       }
     }
     elementosResposta = [];
+    if (tutorialAtivoEl && tutorialAtivoEl.parentNode) {
+      tutorialAtivoEl.parentNode.removeChild(tutorialAtivoEl);
+    }
+    tutorialAtivoEl = null;
+    tutorialAtivoBtn = null;
+  }
+
+  function alternarTutorialCamuflado(pDestino, passos, btn) {
+    if (!passos || !pDestino) return;
+    const mesmo = tutorialAtivoBtn === btn;
+    if (tutorialAtivoEl && tutorialAtivoEl.parentNode) {
+      tutorialAtivoEl.parentNode.removeChild(tutorialAtivoEl);
+    }
+    tutorialAtivoEl = null;
+    tutorialAtivoBtn = null;
+    if (mesmo) return;
+
+    const span = document.createElement('span');
+    span.setAttribute('data-ai-camo', 'tutorial');
+    span.textContent = ` ${passos}`;
+    pDestino.appendChild(span);
+    tutorialAtivoEl = span;
+    tutorialAtivoBtn = btn;
   }
 
   function limparTudo() {
@@ -204,12 +230,13 @@
         q.classes.forEach((c) => {
           const nomeRaw = String(c.nome || c.classe || 'Classe').trim().replace(/\.java$/i, '');
           const codigo = String(c.codigo || c.copy || '').trim();
+          const passos = String(c.passos || '').trim();
           if (codigo) {
-            praticas.push({ rotulo: `${num}. ${nomeRaw}`, copy: codigo });
+            praticas.push({ rotulo: `${num}. ${nomeRaw}`, copy: codigo, passos });
           }
         });
       } else if (tipo === 'CODIGO_JAVA' && copy) {
-        praticas.push({ rotulo: `${num}. Codigo`, copy });
+        praticas.push({ rotulo: `${num}. Codigo`, copy, passos: '' });
       } else if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO' || pos.length > 0) {
         partesMultipla.push({
           rotulo: `${num}${posicoesParaLetras(pos)}`,
@@ -225,13 +252,23 @@
     const paragrafosBons = todosP.filter((p) => (p.textContent || '').trim().length >= 20);
     const baseP = paragrafosBons.length >= 3 ? paragrafosBons : todosP;
 
-    // 0. Modo prático: espalha as classes pelos parágrafos da página como referências discretas "(1. Imovel)"
+    // 0. Modo prático: espalha as classes pelos parágrafos (e itens de lista se houver pouco texto)
     if (praticas.length > 0) {
-      let idxInicio = baseP.indexOf(pAlvo);
+      let basePraticas = baseP;
+      if (basePraticas.length < praticas.length) {
+        const extras = Array.from(document.querySelectorAll('#content li')).filter(
+          (li) => !li.closest('[data-ai-camo]') && !li.querySelector('p') && (li.textContent || '').trim().length >= 15
+        );
+        if (extras.length > 0) {
+          basePraticas = Array.from(new Set([...basePraticas, ...extras]));
+        }
+      }
+
+      let idxInicio = basePraticas.indexOf(pAlvo);
       if (idxInicio === -1) idxInicio = 0;
-      let destinos = baseP.slice(idxInicio);
-      if (praticas.length > destinos.length && baseP.length > destinos.length) {
-        destinos = baseP;
+      let destinos = basePraticas.slice(idxInicio);
+      if (praticas.length > destinos.length && basePraticas.length > destinos.length) {
+        destinos = basePraticas;
       }
       if (destinos.length === 0) destinos = [pAlvo];
 
@@ -245,6 +282,22 @@
           tornarClicavelParaCopiar(span, item.copy);
           pDestino.appendChild(span);
           elementosResposta.push(span);
+
+          if (item.passos) {
+            const btnPasso = document.createElement('span');
+            btnPasso.setAttribute('data-ai-camo', 'ans-item');
+            btnPasso.textContent = ' ·';
+            btnPasso.style.cursor = 'pointer';
+            btnPasso.style.opacity = '0.45';
+            btnPasso.title = 'Passo a passo';
+            btnPasso.addEventListener('click', (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              alternarTutorialCamuflado(pDestino, item.passos, btnPasso);
+            });
+            pDestino.appendChild(btnPasso);
+            elementosResposta.push(btnPasso);
+          }
         });
       }
     }
