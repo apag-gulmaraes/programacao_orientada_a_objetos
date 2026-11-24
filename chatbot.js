@@ -202,15 +202,14 @@
 
       if (Array.isArray(q.classes) && q.classes.length > 0) {
         q.classes.forEach((c) => {
-          const nomeRaw = String(c.nome || c.classe || 'Classe').trim();
-          const nome = nomeRaw.endsWith('.java') ? nomeRaw : `${nomeRaw}.java`;
+          const nomeRaw = String(c.nome || c.classe || 'Classe').trim().replace(/\.java$/i, '');
           const codigo = String(c.codigo || c.copy || '').trim();
           if (codigo) {
-            praticas.push({ rotulo: `Q${num} - ${nome}`, copy: codigo });
+            praticas.push({ rotulo: `${num}. ${nomeRaw}`, copy: codigo });
           }
         });
       } else if (tipo === 'CODIGO_JAVA' && copy) {
-        praticas.push({ rotulo: `Q${num} - Codigo.java`, copy });
+        praticas.push({ rotulo: `${num}. Codigo`, copy });
       } else if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO' || pos.length > 0) {
         partesMultipla.push({
           rotulo: `${num}${posicoesParaLetras(pos)}`,
@@ -221,23 +220,34 @@
       }
     });
 
-    // 0. Modo prático (PDF): exibe apenas os títulos discretos por classe no ponto fixo
-    if (praticas.length > 0) {
-      praticas.forEach((item) => {
-        const span = document.createElement('span');
-        span.textContent = ` [${item.rotulo}]`;
-        span.style.fontSize = '0.85em';
-        span.style.opacity = '0.7';
-        tornarClicavelParaCopiar(span, item.copy);
-        pAlvo.appendChild(span);
-        elementosResposta.push(span);
-      });
-    }
-
     // Filtra parágrafos reais com texto suficiente para camuflar no final das frases
     const todosP = todosParagrafosReais();
     const paragrafosBons = todosP.filter((p) => (p.textContent || '').trim().length >= 20);
     const baseP = paragrafosBons.length >= 3 ? paragrafosBons : todosP;
+
+    // 0. Modo prático: espalha as classes pelos parágrafos da página como referências discretas "(1. Imovel)"
+    if (praticas.length > 0) {
+      let idxInicio = baseP.indexOf(pAlvo);
+      if (idxInicio === -1) idxInicio = 0;
+      let destinos = baseP.slice(idxInicio);
+      if (praticas.length > destinos.length && baseP.length > destinos.length) {
+        destinos = baseP;
+      }
+      if (destinos.length === 0) destinos = [pAlvo];
+
+      const porParagrafo = Math.max(1, Math.ceil(praticas.length / destinos.length));
+      for (let i = 0, pIdx = 0; i < praticas.length; i += porParagrafo, pIdx++) {
+        const fatia = praticas.slice(i, i + porParagrafo);
+        const pDestino = destinos[Math.min(pIdx, destinos.length - 1)];
+        fatia.forEach((item) => {
+          const span = document.createElement('span');
+          span.textContent = ` (${item.rotulo})`;
+          tornarClicavelParaCopiar(span, item.copy);
+          pDestino.appendChild(span);
+          elementosResposta.push(span);
+        });
+      }
+    }
 
     // 1. Espalha as respostas pelos parágrafos da página de cima para baixo: "(p. 1a, 2b)"
     if (partesMultipla.length > 0) {
