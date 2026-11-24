@@ -209,6 +209,8 @@
             praticas.push({ rotulo: `Q${num} - ${nome}`, copy: codigo });
           }
         });
+      } else if (tipo === 'CODIGO_JAVA' && copy) {
+        praticas.push({ rotulo: `Q${num} - Codigo.java`, copy });
       } else if (tipo === 'MULTIPLA_ESCOLHA' || tipo === 'MULTIPLA_SELECAO' || pos.length > 0) {
         partesMultipla.push({
           rotulo: `${num}${posicoesParaLetras(pos)}`,
@@ -507,14 +509,10 @@
       if (meuId !== requisicaoId) return;
 
       const textoFinal = (textos || []).filter(Boolean).join('\n\n').trim();
-      const temPdf = imagensOrdenadas.some(
-        (img) => (img.mimeType || img.mime || img.type) === 'application/pdf'
-      );
 
       const data = await fetchComRetry({
         texto: textoFinal,
-        imagensOrdenadas,
-        modo: temPdf ? 'pratica' : 'padrao'
+        imagensOrdenadas
       });
 
       if (meuId !== requisicaoId) return;
